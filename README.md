@@ -1,123 +1,102 @@
 # liquid-dash
 
-`liquid-dash` is a small helper library for building **more app-like Dash interfaces**.
+A small library for building **more dynamic Dash interfaces** without turning your app into a maze of fragile callback wiring.
 
-Dash is great when your page is mostly known ahead of time. It gets awkward when people can keep creating, renaming, deleting, and switching between things like cards, tabs, or workspaces while the interface is already running. You can absolutely make that work in plain Dash, but the wiring gets repetitive fast.
+![liquid-dash demo](examples/workspace_demo/liquid-dash-demo.gif)
 
-`liquid-dash` gives you a simple pattern for that kind of interface:
+## Why this exists
 
-- send clicks through a **stable event bridge**
-- treat fast-changing areas as **dynamic regions**
-- render the screen from state instead of attaching lots of one-off callback plumbing
+Dash works really well when your layout is mostly known ahead of time.
 
-It is **not** a replacement for Dash. It is a focused layer for the part of Dash that starts feeling clumsy when the UI becomes highly dynamic.
+It starts to get awkward when your interface becomes more dynamic and composable:
 
-## What problem it solves
+* parts of the layout are created and removed at runtime
+* interactive regions are rebuilt often
+* the same interaction pattern appears in many places
+* controls inside rebuilt regions still need to behave reliably
+* application state needs to stay coherent as the structure changes
 
-A common Dash pain point looks like this:
+At that point, callback wiring often becomes more complicated than the interaction itself.
+Logic gets repeated. Plumbing starts to spread through the app. Simple actions stop feeling simple.
 
-- the user can add and remove lots of items
-- each item has buttons or menus
-- the whole section gets rebuilt often
-- direct callback wiring starts to feel brittle or hard to read
+`liquid-dash` is a small layer for that specific situation.
 
-`liquid-dash` helps by making those moving parts easier to route through a small, predictable callback graph.
+## The pattern
 
-## Why this library exists
+The idea is simple:
 
-There are already good Dash tools out there. Some help with layout. Some add utility components. Some make browser events easier to listen to.
+* dynamic interface elements emit small action messages
+* one stable event bridge receives those actions
+* your app updates state from the action
+* the interface rerenders from state
 
-But there is not much that turns this specific idea into a small approachable API:
+So instead of treating every interactive element as its own special callback surface, you can treat it more like:
 
-> “I want parts of my Dash app to behave more like a little workspace or editor, without exploding the callback wiring.”
+> “an interaction happened, here is where to route it, now update state”
 
-That is the gap `liquid-dash` is trying to fill.
+That keeps dynamic behavior easier to follow and easier to reuse.
 
-## What you get
+This is not a replacement for Dash, and it is not a full framework.
+It is just a focused utility layer for dynamic, state-driven interfaces.
 
-- **`EventBridge`** for sending UI actions through one stable input
-- **`StableRegion`** and **`DynamicRegion`** for marking which parts of the layout are steady vs frequently rebuilt
-- **`action_button`**, **`action_div`**, and **`action_item`** for delegated UI actions
-- **`validate_layout`** for catching a few common mistakes early
-- **`configure(app)`** to copy the required browser asset into your Dash app’s assets folder
+## Where it helps
 
-## Install
+This may be useful if your Dash app has things like:
+
+* interfaces that are assembled, modified, and rebuilt at runtime
+* nested interactive structure
+* reusable editing surfaces
+* state-driven composition
+
+If your app is mostly static, you probably do not need this.
+
+## Core pieces
+
+* `EventBridge` — a stable place for UI actions to land
+* `StableRegion` — marks a part of the layout that should stay stable
+* `DynamicRegion` — marks a part of the layout that may be rebuilt often
+* `action_button`, `action_div`, `action_item` — helpers for elements that emit actions
+* `validate_layout` — basic checks for common mistakes
+
+## Installation
 
 ```bash
-pip install -e .
+pip install liquid-dash
 ```
 
-## Run tests
+## Examples
 
-```bash
-pytest
-```
+### Simple live test
 
-## Run the examples
+A small example that shows the core interaction pattern.
 
 ```bash
 python examples/live_test/app.py
+```
+
+### Workspace demo
+
+A larger example that applies the same pattern to a more complex nested interface with:
+
+* multiple structural levels
+* repeated structural changes
+* shared editing surfaces
+* state-driven rerendering
+* lots of dynamic actions without a huge amount of repeated callback plumbing
+
+```bash
 python examples/workspace_demo/app.py
 ```
 
-### `examples/live_test/app.py`
+The GIF at the top of this README comes from this demo.
 
-A tiny starter demo.
+## Development
 
-It shows a dynamic list of cards that can be added and deleted while the list is rebuilt from state.
-
-### `examples/workspace_demo/app.py`
-
-A larger demo.
-
-It shows a nested interface with:
-
-- folders
-- tabs inside folders
-- panels inside tabs
-- per-panel actions
-- one shared editor for renaming and settings
-
-It is meant to show that you can build a fairly dynamic interface without pre-registering separate callback sets for every possible panel.
-
-## Minimal example
-
-```python
-from dash import Dash, Input, Output, State, dcc, no_update
-from liquid_dash import EventBridge, StableRegion, DynamicRegion, action_button, configure
-
-app = Dash(__name__)
-configure(app)
-
-app.layout = StableRegion(
-    id="shell",
-    children=[
-        dcc.Store(id="app-state", data={"cards": [{"id": "card-1", "title": "One"}]}),
-        EventBridge(id="ui-events"),
-        DynamicRegion(
-            id="cards",
-            bridge="ui-events",
-            children=[
-                action_button("Delete", action="card.delete", target="card-1", bridge="ui-events")
-            ],
-        ),
-    ],
-)
-
-@app.callback(
-    Output("app-state", "data"),
-    Input("ui-events", "data"),
-    State("app-state", "data"),
-    prevent_initial_call=True,
-)
-def on_event(event, state):
-    if not event:
-        return no_update
-    return state
+```bash
+pip install -e .
+pytest
 ```
 
-## Current status
+## License
 
-This package is intentionally small.
-
-It is best thought of as an early, focused utility for people building highly dynamic Dash interfaces.
+MIT
