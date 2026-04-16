@@ -17,16 +17,25 @@ tracks cumulative activity:
 Tests run: N    Round-trips: N    Total: N KB    Total time: N s
 ```
 
+A fixed **Head-to-head** panel in the top-right corner has a
+**▶ Run both tests** button that fires both columns in parallel and
+aggregates the per-run deltas into percent-difference cards
+(`80% fewer round-trips (LD)`, `84% less data (LD)`,
+`63% faster (LD)`). The aggregate accumulates across every
+Run-both click so the raw before → after numbers grow with use.
+
 ## Measured contrast (one test run = 9 clicks)
 
-| | callback graph | round-trips | bytes | wall time |
+| | callback graph | round-trips | bytes | wall time (click → last response) |
 |---|---|---|---|---|
-| Pure Dash column | 10 callbacks | ~88 | ~108 KB | ~5.9 s |
-| Liquid Dash column | 2 callbacks + 9 reducers | ~18 | ~18 KB | ~5.6 s |
+| Pure Dash column | 10 callbacks | ~88 | ~108 KB | ~1.7 s |
+| Liquid Dash column | 2 callbacks + 9 reducers | ~18 | ~18 KB | ~0.6 s |
+| Liquid Dash win | ~80% smaller graph | ~80% fewer | ~84% less | ~63% faster |
 
-Both columns take about the same wall-clock time (debounce-dominated),
-but Pure Dash sends ~6× the round-trips and ~6× the bytes. The gap
-widens per extra test run because payloads carry bigger state.
+Percentages are stable across runs (both columns scale proportionally).
+Absolute numbers grow per run because each click operates on more
+state — which is exactly where Pure Dash's per-trip payload cost
+scales linearly and Liquid Dash's doesn't.
 
 ### What "2 callbacks + 9 reducers" means
 
@@ -34,8 +43,9 @@ Both sides have the same number of *actions* (9). The difference is
 whether those actions are first-class Dash callbacks.
 
 - **Pure Dash:** one Dash callback per action type (9) + renderer (1) =
-  **10 in the callback graph**. Every entry is a pattern-matching
-  subscriber. Adding a new action adds a new pattern callback.
+  **10 in the callback graph**. Every action callback is a
+  pattern-matching subscriber. Adding a new action adds a new pattern
+  callback.
 - **Liquid Dash:** one Dash callback for dispatch (1) + renderer (1) =
   **2 in the callback graph**. Per-action logic lives as 9 reducers
   registered on the dispatch callback's action registry
@@ -74,6 +84,53 @@ Every pure-Dash action callback writes to `canvas.data` with
 invariant you want to maintain (e.g. undo, optimistic updates) has to
 account for all ten writers. Liquid Dash has one writer — the
 dispatch callback — so invariants live in one place.
+
+## What Liquid Dash wins (and what it doesn't claim)
+
+### Directly measured in this demo
+
+- **Faster** — ~63% less wall-clock time from click to last response.
+- **Less network traffic** — ~84% fewer bytes over the wire, because
+  every pure-Dash phantom round-trip ships the full State store just
+  to return `no_update`.
+- **Less wiring code** — 108 lines vs 31 lines (71% less) for the
+  plumbing between UI and mutation helpers. The mutation helpers
+  themselves (`do_folder_add`, `do_panel_duplicate`, …) are identical
+  on both sides — the savings are all in the plumbing.
+- **Smaller callback graph** — 10 Dash callbacks vs 2 + 9 reducers.
+  Reducers aren't Dash primitives, so they don't carry pattern
+  subscription, phantom-fire, or `allow_duplicate` overhead.
+
+### Inferred but not measured
+
+- **Memory / allocation pressure** is almost certainly lower on the
+  Liquid Dash side — each pure-Dash phantom round-trip allocates a
+  full State copy only to return `no_update`, so the per-click
+  allocation count is ~5× higher. The bytes-over-wire number is a
+  decent proxy but not proof; we never put the server process on a
+  scale.
+
+### Qualitative but real
+
+- **Easier to reason about.** One dispatch callback, one store
+  writer, one place where invariants live.
+- **Harder to fuck up.** The pure-Dash footguns Liquid Dash doesn't
+  make you remember include:
+    - `if not ctx.triggered_id or ctx.triggered[0]["value"] is None:
+      return no_update` — the canonical guard for ALL-pattern
+      callbacks. The weaker `if not ctx.triggered_id` variant
+      silently mutates state on phantom fires.
+    - Pattern-matching ALL semantics and knowing when matched sets
+      change.
+    - `allow_duplicate=True` multi-writer coordination on shared
+      stores.
+    - Payload threading through pattern ID dicts for
+      multi-parameter actions.
+    - Phantom-fire discipline every time you add a new pattern
+      callback.
+
+Liquid Dash reducers are just `@events.on("name") def _(s, payload,
+event): ...` with no defensive boilerplate. None of the above applies.
 
 ## What Liquid Dash trades away
 
