@@ -105,7 +105,8 @@ wrapper owns the data attributes. Accepts:
 - `payload=` — JSON-serializable value passed to the handler
 - `event=` — DOM event name (default `"click"`)
 - `to=` — target bridge id (default `"bridge"`)
-- `target=`, `source=` — optional context strings on the event
+- `target=`, `source=` — optional context values on the event
+  (any JSON-serializable; types round-trip to the handler)
 - `prevent_default=True` — calls `event.preventDefault()` client-side
 
 Curried form: `ld.on(action, ...)` with no component returns a reusable

@@ -18,12 +18,12 @@
     return scope ? scope.getAttribute("data-ld-default-bridge") : null;
   }
 
-  function parsePayload(raw) {
+  function parseJsonAttr(raw, name) {
     if (raw === null || raw === undefined || raw === "") return null;
     try {
       return JSON.parse(raw);
     } catch (err) {
-      console.warn("liquid_dash: failed to parse payload", err);
+      console.warn("liquid_dash: failed to parse " + name, err);
       return null;
     }
   }
@@ -69,9 +69,9 @@
 
     var payload = {
       action: start.dataset.ldAction,
-      target: start.dataset.ldTarget || null,
-      payload: parsePayload(start.dataset.ldPayload),
-      source: start.dataset.ldSource || null,
+      target: parseJsonAttr(start.dataset.ldTarget, "target"),
+      payload: parseJsonAttr(start.dataset.ldPayload, "payload"),
+      source: parseJsonAttr(start.dataset.ldSource, "source"),
       bridge: bridge,
       event_type: event.type,
       native: extractEventFields(event),

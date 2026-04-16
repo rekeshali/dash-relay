@@ -29,16 +29,18 @@ def _wrap(
 
     try:
         payload_json = json.dumps(payload)
+        target_json = json.dumps(target)
+        source_json = json.dumps(source)
     except TypeError as exc:
-        raise ValueError("on(): payload must be JSON serializable") from exc
+        raise ValueError("on(): payload, target, and source must be JSON serializable") from exc
 
     attrs = {
         "data-ld-action": action,
         "data-ld-event": event,
         "data-ld-payload": payload_json,
         "data-ld-bridge": to or "",
-        "data-ld-target": "" if target is None else str(target),
-        "data-ld-source": "" if source is None else str(source),
+        "data-ld-target": target_json,
+        "data-ld-source": source_json,
         "data-ld-prevent-default": "true" if prevent_default else "false",
     }
 

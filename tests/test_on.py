@@ -14,7 +14,7 @@ def test_on_wraps_any_component_with_data_attributes():
                     payload={"kind": "plot"})
     props = _props(wrapped)
     assert props["data-ld-action"] == "card.delete"
-    assert props["data-ld-target"] == "card-1"
+    assert json.loads(props["data-ld-target"]) == "card-1"
     assert props["data-ld-event"] == "click"
     assert props["data-ld-bridge"] == "bridge"
     assert json.loads(props["data-ld-payload"]) == {"kind": "plot"}
@@ -67,26 +67,38 @@ def test_on_rejects_non_json_payload():
         raise AssertionError("Expected ValueError for non-JSON payload")
 
 
-def test_on_stringifies_integer_target():
-    # Client JS reads dataset attributes as strings; stringify at the boundary
-    # so handlers comparing `event["target"]` to `item["id"]` don't silently
-    # fail on int-vs-str mismatch.
+def test_on_target_round_trips_integer():
+    # target/source are JSON-encoded so types survive the trip through
+    # HTML data-* attributes and JSON.parse on the JS side. Handlers
+    # receive the original Python type back.
     wrapped = ld.on(html.Button("x"), "delete", target=42)
-    assert _props(wrapped)["data-ld-target"] == "42"
+    assert json.loads(_props(wrapped)["data-ld-target"]) == 42
 
 
-def test_on_stringifies_zero_target():
-    # target=0 used to fall through `target or ""` and become "" — a silent
-    # data-loss bug. Now it becomes "0".
+def test_on_target_round_trips_zero():
     wrapped = ld.on(html.Button("x"), "delete", target=0)
-    assert _props(wrapped)["data-ld-target"] == "0"
+    assert json.loads(_props(wrapped)["data-ld-target"]) == 0
 
 
-def test_on_treats_none_target_as_empty():
+def test_on_target_round_trips_none():
     wrapped = ld.on(html.Button("x"), "delete", target=None)
-    assert _props(wrapped)["data-ld-target"] == ""
+    assert json.loads(_props(wrapped)["data-ld-target"]) is None
 
 
-def test_on_stringifies_source():
+def test_on_target_round_trips_string():
+    wrapped = ld.on(html.Button("x"), "delete", target="card-1")
+    assert json.loads(_props(wrapped)["data-ld-target"]) == "card-1"
+
+
+def test_on_source_round_trips_integer():
     wrapped = ld.on(html.Button("x"), "delete", source=7)
-    assert _props(wrapped)["data-ld-source"] == "7"
+    assert json.loads(_props(wrapped)["data-ld-source"]) == 7
+
+
+def test_on_rejects_non_json_target():
+    try:
+        ld.on(html.Button("x"), "a", target={1, 2})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError for non-JSON target")
