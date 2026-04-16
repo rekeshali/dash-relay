@@ -359,12 +359,66 @@ def _render_ld_column(state):
 
 
 _CONSOLE_JS = r"""
+<style>
+  .tl-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-bottom: 1px solid #eee;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-badge {
+    background: #111; color: white; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; flex-shrink: 0; min-width: 80px; text-align: center;
+  }
+  .tl-dots { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+  .tl-click-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: #22c55e;
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.6); display: inline-block;
+  }
+  .tl-rt-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #ef4444;
+    display: inline-block;
+    animation: tl-pop 0.3s ease-out;
+  }
+  @keyframes tl-pop {
+    0% { transform: scale(0); opacity: 0; }
+    60% { transform: scale(1.4); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .tl-duration {
+    color: #666; font-size: 10px; flex-shrink: 0; min-width: 50px; text-align: right;
+  }
+  .tl-pending .tl-duration { color: #f59e0b; }
+  .tl-panel {
+    background: white; border: 1px solid #ddd; border-radius: 4px;
+    height: 200px; overflow-y: auto; margin-top: 8px;
+  }
+</style>
 <script>
 (function () {
   if (window.__nestedSbsInstalled) return;
   window.__nestedSbsInstalled = true;
   var origFetch = window.fetch;
-  function append(side, line) {
+  var tlState = { pd: {row: null, start: 0, timer: null}, ld: {row: null, start: 0, timer: null} };
+
+  function sideOf(out) {
+    if (typeof out !== "string") return null;
+    if (out.indexOf("pd-") === 0) return "pd";
+    if (out.indexOf("ld-") === 0) return "ld";
+    return null;
+  }
+
+  function sideOfClick(el) {
+    var node = el;
+    while (node && node.nodeType === 1) {
+      if (node.id === "pd-root") return "pd";
+      if (node.id === "ld-root") return "ld";
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function appendRaw(side, line) {
     var el = document.getElementById(side + "-console");
     if (!el) return;
     var div = document.createElement("div");
@@ -373,18 +427,85 @@ _CONSOLE_JS = r"""
     el.scrollTop = el.scrollHeight;
     while (el.children.length > 200) el.removeChild(el.firstChild);
   }
-  function sideOf(out) {
-    if (typeof out !== "string") return null;
-    if (out.indexOf("pd-") === 0) return "pd";
-    if (out.indexOf("ld-") === 0) return "ld";
-    return null;
-  }
+
   function shortTrig(ids) {
     if (!ids || !ids.length) return "(init)";
     return ids.map(function (s) {
       return s.replace(/"/g, "").replace(/[\{\}]/g, "").replace(/\.n_clicks$/, "");
     }).join(", ");
   }
+
+  function finalizeRow(side) {
+    var st = tlState[side];
+    if (!st.row) return;
+    var dur = Date.now() - st.start;
+    var d = st.row.querySelector(".tl-duration");
+    if (d) d.textContent = dur + "ms";
+    st.row.classList.remove("tl-pending");
+    st.row = null;
+    if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+  }
+
+  function scheduleFinalize(side) {
+    var st = tlState[side];
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = setTimeout(function () { finalizeRow(side); }, 600);
+  }
+
+  function startRow(side, label) {
+    finalizeRow(side);  // close any pending row
+    var tl = document.getElementById(side + "-timeline");
+    if (!tl) return;
+    var row = document.createElement("div");
+    row.className = "tl-row tl-pending";
+    var badge = document.createElement("span");
+    badge.className = "tl-badge";
+    badge.textContent = label;
+    var dots = document.createElement("span");
+    dots.className = "tl-dots";
+    var click = document.createElement("span");
+    click.className = "tl-click-dot";
+    click.title = "user click";
+    dots.appendChild(click);
+    var dur = document.createElement("span");
+    dur.className = "tl-duration";
+    dur.textContent = "...";
+    row.appendChild(badge);
+    row.appendChild(dots);
+    row.appendChild(dur);
+    tl.appendChild(row);
+    tl.scrollTop = tl.scrollHeight;
+    while (tl.children.length > 20) tl.removeChild(tl.firstChild);
+    tlState[side].row = row;
+    tlState[side].start = Date.now();
+    scheduleFinalize(side);
+  }
+
+  function addRoundTrip(side) {
+    var st = tlState[side];
+    if (!st.row) {
+      // round-trip with no preceding click (e.g. init, or a click we didn't
+      // catch) — create an "init" row so the dots still show up somewhere.
+      startRow(side, "(init)");
+    }
+    var dots = st.row.querySelector(".tl-dots");
+    var d = document.createElement("span");
+    d.className = "tl-rt-dot";
+    d.title = "server round-trip";
+    dots.appendChild(d);
+    scheduleFinalize(side);
+  }
+
+  // Intercept clicks before Dash sees them so we get clean per-click rows.
+  document.addEventListener("click", function (e) {
+    var side = sideOfClick(e.target);
+    if (!side) return;
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    var label = (btn.textContent || "").trim().replace(/\s+/g, " ").slice(0, 24) || "(click)";
+    startRow(side, label);
+  }, true);
+
   window.fetch = function () {
     var args = arguments;
     var url = typeof args[0] === "string" ? args[0] : args[0].url;
@@ -402,7 +523,8 @@ _CONSOLE_JS = r"""
                   String(t.getSeconds()).padStart(2, "0") + "." +
                   String(t.getMilliseconds()).padStart(3, "0");
       var label = (out || "?").split("@")[0];
-      append(side, stamp + "  " + label + "  <-  " + shortTrig(trig));
+      appendRaw(side, stamp + "  " + label + "  <-  " + shortTrig(trig));
+      addRoundTrip(side);
     }
     return origFetch.apply(this, args);
   };
@@ -426,6 +548,7 @@ app.index_string = app.index_string.replace("<head>", "<head>" + _CONSOLE_JS, 1)
 # action callbacks share the single Output("pd-state","data") with
 # allow_duplicate=True.
 # ---------------------------------------------------------------------------
+# >>> PD-ACTIONS-BEGIN
 
 
 def _pd_guard():
@@ -558,6 +681,9 @@ def pd_panel_duplicate(_clicks, s):
     return s
 
 
+# <<< PD-ACTIONS-END
+
+
 # ---------------------------------------------------------------------------
 # Liquid Dash column
 #
@@ -566,6 +692,7 @@ def pd_panel_duplicate(_clicks, s):
 # do_* helper. The callback graph is the same whether we have 9 actions or
 # 90.
 # ---------------------------------------------------------------------------
+# >>> LD-ACTIONS-BEGIN
 
 
 events = ld.handler(app, state="ld-state", bridge="ld-bridge")
@@ -621,6 +748,9 @@ def ld_render(state):
     return _render_ld_column(state)
 
 
+# <<< LD-ACTIONS-END
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -632,11 +762,11 @@ _CONSOLE_STYLE = {
     "background": "#0e1014",
     "color": "#9eff9e",
     "padding": "8px 10px",
-    "height": "220px",
+    "height": "140px",
     "overflowY": "auto",
     "borderRadius": "4px",
     "border": "1px solid #2a2a2a",
-    "marginTop": "8px",
+    "marginTop": "4px",
     "lineHeight": "1.5",
 }
 
@@ -652,24 +782,66 @@ def _count_callbacks(prefix):
     return count
 
 
+# Count the lines of code that WIRE each column's UI to its mutation helpers.
+# We measure the sections between marker comments so the numbers track the
+# file as it evolves.
+def _count_source_lines(begin_marker, end_marker):
+    try:
+        text = Path(__file__).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    lines = text.splitlines()
+    begin = end = None
+    for i, line in enumerate(lines):
+        if begin is None and begin_marker in line:
+            begin = i
+        elif end is None and end_marker in line:
+            end = i
+            break
+    if begin is None or end is None:
+        return 0
+    # Count non-blank, non-pure-comment lines in between
+    count = 0
+    for line in lines[begin + 1:end]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        count += 1
+    return count
+
+
 _PD_CB_COUNT = _count_callbacks("pd-")
 _LD_CB_COUNT = _count_callbacks("ld-")
+_PD_LINES = _count_source_lines("PD-ACTIONS-BEGIN", "PD-ACTIONS-END")
+_LD_LINES = _count_source_lines("LD-ACTIONS-BEGIN", "LD-ACTIONS-END")
 
 
-def _column(title, cb_count, root_id, console_id):
+def _column(title, cb_count, line_count, root_id, timeline_id, console_id):
+    stat_style = {"fontSize": "11px", "color": "#666",
+                  "fontFamily": "ui-monospace, monospace",
+                  "padding": "2px 8px", "background": "#eee", "borderRadius": "10px"}
     return html.Div([
         html.Div([
             html.H2(title, style={"margin": 0}),
-            html.Span(
-                f"{cb_count} callbacks registered",
-                style={"marginLeft": "12px", "fontSize": "12px", "color": "#666",
-                       "fontFamily": "ui-monospace, monospace"},
-            ),
-        ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "16px"}),
+            html.Span(f"{cb_count} callbacks", style=stat_style),
+            html.Span(f"{line_count} lines of wiring", style=stat_style),
+        ], style={"display": "flex", "alignItems": "center", "gap": "8px", "marginBottom": "16px"}),
         html.Div(id=root_id),
         html.Hr(),
-        html.Div("callback activity (live):",
-                 style={"fontSize": "12px", "color": "#666"}),
+        html.Div([
+            html.Span("click timeline", style={"fontSize": "12px", "color": "#666"}),
+            html.Span(
+                "  ● user click    ● server round-trip",
+                style={"fontSize": "11px", "color": "#888", "marginLeft": "12px"},
+            ),
+        ]),
+        html.Div(id=timeline_id, className="tl-panel"),
+        html.Div(
+            "raw callback log (live):",
+            style={"fontSize": "12px", "color": "#666", "marginTop": "12px"},
+        ),
         html.Div(id=console_id, style=_CONSOLE_STYLE),
     ], style={
         "padding": "20px",
@@ -696,8 +868,8 @@ app.layout = html.Div([
     dcc.Store(id="ld-state", data=initial_state()),
     ld.bridge("ld-bridge"),
     html.Div([
-        _column("Pure Dash", _PD_CB_COUNT, "pd-root", "pd-console"),
-        _column("Liquid Dash", _LD_CB_COUNT, "ld-root", "ld-console"),
+        _column("Pure Dash", _PD_CB_COUNT, _PD_LINES, "pd-root", "pd-timeline", "pd-console"),
+        _column("Liquid Dash", _LD_CB_COUNT, _LD_LINES, "ld-root", "ld-timeline", "ld-console"),
     ], style={"display": "flex", "gap": "20px", "alignItems": "stretch"}),
 ], style={
     "fontFamily": "system-ui, -apple-system, sans-serif",
