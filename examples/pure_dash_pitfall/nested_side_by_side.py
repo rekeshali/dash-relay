@@ -386,7 +386,8 @@ _CONSOLE_JS = r"""
     100% { transform: scale(1); opacity: 1; }
   }
   .tl-duration {
-    color: #666; font-size: 10px; flex-shrink: 0; min-width: 50px; text-align: right;
+    color: #666; font-size: 10px; flex-shrink: 0; min-width: 120px; text-align: right;
+    font-variant-numeric: tabular-nums;
   }
   .tl-pending .tl-duration { color: #f59e0b; }
   .tl-panel {
@@ -435,12 +436,19 @@ _CONSOLE_JS = r"""
     }).join(", ");
   }
 
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+
   function finalizeRow(side) {
     var st = tlState[side];
     if (!st.row) return;
     var dur = Date.now() - st.start;
+    var bytes = parseInt(st.row.dataset.bytes || "0", 10);
     var d = st.row.querySelector(".tl-duration");
-    if (d) d.textContent = dur + "ms";
+    if (d) d.textContent = fmtBytes(bytes) + " · " + dur + "ms";
     st.row.classList.remove("tl-pending");
     st.row = null;
     if (st.timer) { clearTimeout(st.timer); st.timer = null; }
@@ -458,6 +466,7 @@ _CONSOLE_JS = r"""
     if (!tl) return;
     var row = document.createElement("div");
     row.className = "tl-row tl-pending";
+    row.dataset.bytes = "0";
     var badge = document.createElement("span");
     badge.className = "tl-badge";
     badge.textContent = label;
@@ -481,17 +490,19 @@ _CONSOLE_JS = r"""
     scheduleFinalize(side);
   }
 
-  function addRoundTrip(side) {
+  function addRoundTrip(side, bytes) {
     var st = tlState[side];
     if (!st.row) {
       // round-trip with no preceding click (e.g. init, or a click we didn't
       // catch) — create an "init" row so the dots still show up somewhere.
       startRow(side, "(init)");
     }
-    var dots = st.row.querySelector(".tl-dots");
+    var row = st.row;
+    row.dataset.bytes = String(parseInt(row.dataset.bytes || "0", 10) + bytes);
+    var dots = row.querySelector(".tl-dots");
     var d = document.createElement("span");
     d.className = "tl-rt-dot";
-    d.title = "server round-trip";
+    d.title = "server round-trip · " + fmtBytes(bytes);
     dots.appendChild(d);
     scheduleFinalize(side);
   }
@@ -512,8 +523,10 @@ _CONSOLE_JS = r"""
     if (!url || url.indexOf("_dash-update-component") < 0) {
       return origFetch.apply(this, args);
     }
+    var rawBody = args[1].body || "";
+    var bytes = rawBody.length || 0;
     var body = null;
-    try { body = JSON.parse(args[1].body); } catch (e) {}
+    try { body = JSON.parse(rawBody); } catch (e) {}
     var out = body && body.output;
     var trig = body && body.changedPropIds;
     var side = sideOf(out);
@@ -523,8 +536,8 @@ _CONSOLE_JS = r"""
                   String(t.getSeconds()).padStart(2, "0") + "." +
                   String(t.getMilliseconds()).padStart(3, "0");
       var label = (out || "?").split("@")[0];
-      appendRaw(side, stamp + "  " + label + "  <-  " + shortTrig(trig));
-      addRoundTrip(side);
+      appendRaw(side, stamp + "  " + label + "  (" + fmtBytes(bytes) + ")  <-  " + shortTrig(trig));
+      addRoundTrip(side, bytes);
     }
     return origFetch.apply(this, args);
   };
