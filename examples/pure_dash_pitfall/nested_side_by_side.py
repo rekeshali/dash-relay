@@ -408,6 +408,10 @@ _CONSOLE_JS = r"""
   .cmp-results .cmp-win { color: #1f8a4c; }
   .cmp-results .cmp-loss { color: #c43838; }
   .cmp-empty { color: #888; font-style: italic; font-size: 11px; }
+  .cmp-runs {
+    color: #888; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; margin-bottom: 2px;
+  }
   .tl-row {
     display: flex; align-items: center; gap: 8px;
     padding: 4px 6px; border-bottom: 1px solid #eee;
@@ -688,7 +692,7 @@ _CONSOLE_JS = r"""
   }
   window.__runNestedTest = runTest;  // expose for tests
 
-  // ---- Side-by-side comparison: run both tests, wire deltas to panel ----
+  // ---- Side-by-side comparison: run both tests, aggregate deltas ----
   function snapTotals() {
     return {
       pd: { trips: totals.pd.trips, bytes: totals.pd.bytes, time_ms: totals.pd.time_ms },
@@ -699,6 +703,15 @@ _CONSOLE_JS = r"""
   function diff(a, b) {
     return { trips: a.trips - b.trips, bytes: a.bytes - b.bytes, time_ms: a.time_ms - b.time_ms };
   }
+
+  // Cumulative totals across every "Run both tests" click. Percentages
+  // stay stable (both sides scale proportionally) but the before→after
+  // raw numbers grow with every run, so the panel shows the aggregate.
+  var cmpAggregate = {
+    runs: 0,
+    pd: { trips: 0, bytes: 0, time_ms: 0 },
+    ld: { trips: 0, bytes: 0, time_ms: 0 },
+  };
 
   // Returns percent reduction from pd to ld. Positive = LD smaller.
   function pctReduction(pd, ld) {
@@ -719,17 +732,20 @@ _CONSOLE_JS = r"""
       '</div>';
   }
 
-  function renderCompare(pdDelta, ldDelta) {
+  function renderCompareAggregate() {
     var el = document.getElementById("cmp-results");
     if (!el) return;
+    var a = cmpAggregate;
+    var runWord = a.runs === 1 ? "run" : "runs";
     el.innerHTML =
-      metricRow("Round-trips", pdDelta.trips, ldDelta.trips,
-                pdDelta.trips, ldDelta.trips, "fewer", "more") +
-      metricRow("Data sent", pdDelta.bytes, ldDelta.bytes,
-                fmtBytes(pdDelta.bytes), fmtBytes(ldDelta.bytes),
+      '<div class="cmp-runs">Aggregated over ' + a.runs + ' ' + runWord + '</div>' +
+      metricRow("Round-trips", a.pd.trips, a.ld.trips,
+                a.pd.trips, a.ld.trips, "fewer", "more") +
+      metricRow("Data sent", a.pd.bytes, a.ld.bytes,
+                fmtBytes(a.pd.bytes), fmtBytes(a.ld.bytes),
                 "less", "more") +
-      metricRow("Wall time", pdDelta.time_ms, ldDelta.time_ms,
-                fmtTime(pdDelta.time_ms), fmtTime(ldDelta.time_ms),
+      metricRow("Wall time", a.pd.time_ms, a.ld.time_ms,
+                fmtTime(a.pd.time_ms), fmtTime(a.ld.time_ms),
                 "faster", "slower");
   }
 
@@ -739,7 +755,16 @@ _CONSOLE_JS = r"""
     var before = snapTotals();
     await Promise.all([runTest("pd"), runTest("ld")]);
     var after = snapTotals();
-    renderCompare(diff(after.pd, before.pd), diff(after.ld, before.ld));
+    var pdDelta = diff(after.pd, before.pd);
+    var ldDelta = diff(after.ld, before.ld);
+    cmpAggregate.runs += 1;
+    cmpAggregate.pd.trips += pdDelta.trips;
+    cmpAggregate.pd.bytes += pdDelta.bytes;
+    cmpAggregate.pd.time_ms += pdDelta.time_ms;
+    cmpAggregate.ld.trips += ldDelta.trips;
+    cmpAggregate.ld.bytes += ldDelta.bytes;
+    cmpAggregate.ld.time_ms += ldDelta.time_ms;
+    renderCompareAggregate();
     if (cmpBtn) cmpBtn.disabled = false;
   }
 
