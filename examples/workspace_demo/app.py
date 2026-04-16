@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from dash import Dash, Input, Output, State, dcc, html, no_update
 
@@ -282,163 +282,257 @@ def active_ids_text(state: dict[str, Any]) -> str:
     return f"{folder['title']} / {tab['title']}"
 
 
-# --- Reducer (UI events) ---------------------------------------------------
+# --- Action handlers (one function per UI action) --------------------------
+#
+# Handlers take (states, payload, event) where states is a tuple
+# (canvas, editor). They may mutate canvas/editor in place and return None,
+# or return an explicit (canvas, editor) tuple when they need to reassign
+# one of the state variables (e.g. wholesale replacing editor).
+#
+# Every handler is registered in `_ACTIONS` at import time so it can be
+# dispatched both by the ld.handler() callback in `build_app()` and by the
+# pure-function `reduce_ui_event()` wrapper used in tests.
+
+_ACTIONS: dict[str, Callable] = {}
+
+
+def _action(name: str) -> Callable[[Callable], Callable]:
+    def deco(fn: Callable) -> Callable:
+        _ACTIONS[name] = fn
+        return fn
+    return deco
+
+
+@_action("folder.add")
+def _(states, payload, event):
+    canvas, _editor = states
+    new_tab = make_tab(canvas["next_tab_index"], title="Canvas")
+    canvas["next_tab_index"] += 1
+    new_folder = make_folder(
+        canvas["next_folder_index"], [new_tab],
+        title=f"Folder {canvas['next_folder_index']}",
+    )
+    canvas["next_folder_index"] += 1
+    canvas["folders"].append(new_folder)
+    canvas["active_folder_id"] = new_folder["id"]
+
+
+@_action("folder.activate")
+def _(states, payload, event):
+    canvas, _editor = states
+    folder = find_folder(canvas, event.get("target"))
+    if folder is not None:
+        canvas["active_folder_id"] = folder["id"]
+        ensure_folder_has_tab(canvas, folder)
+
+
+@_action("folder.delete")
+def _(states, payload, event):
+    canvas, editor = states
+    target = event.get("target")
+    if find_folder(canvas, target) is None:
+        return
+    canvas["folders"] = [f for f in canvas["folders"] if f["id"] != target]
+    ensure_state_has_folder(canvas)
+    if editor_targets_folder(editor, target):
+        return canvas, close_editor_state()
+
+
+@_action("folder.rename.open")
+def _(states, payload, event):
+    canvas, editor = states
+    folder = find_folder(canvas, event.get("target"))
+    if folder is None:
+        return
+    return canvas, copy_folder_to_editor(folder)
+
+
+@_action("tab.add")
+def _(states, payload, event):
+    canvas, _editor = states
+    folder = active_folder(canvas)
+    if folder is None:
+        ensure_state_has_folder(canvas)
+        folder = active_folder(canvas)
+    if folder is None:
+        return
+    new_tab = make_tab(canvas["next_tab_index"], title=f"Canvas {canvas['next_tab_index']}")
+    canvas["next_tab_index"] += 1
+    folder["tabs"].append(new_tab)
+    folder["active_tab_id"] = new_tab["id"]
+
+
+@_action("tab.activate")
+def _(states, payload, event):
+    canvas, _editor = states
+    folder, tab = locate_tab(canvas, event.get("target"))
+    if folder is not None and tab is not None:
+        canvas["active_folder_id"] = folder["id"]
+        folder["active_tab_id"] = tab["id"]
+
+
+@_action("tab.delete")
+def _(states, payload, event):
+    canvas, editor = states
+    folder, tab = locate_tab(canvas, event.get("target"))
+    if folder is None or tab is None:
+        return
+    folder["tabs"] = [t for t in folder["tabs"] if t["id"] != tab["id"]]
+    ensure_folder_has_tab(canvas, folder)
+    if editor_targets_tab(editor, tab["id"]):
+        return canvas, close_editor_state()
+
+
+@_action("tab.rename.open")
+def _(states, payload, event):
+    canvas, editor = states
+    folder, tab = locate_tab(canvas, event.get("target"))
+    if folder is None or tab is None:
+        return
+    return canvas, copy_tab_to_editor(folder, tab)
+
+
+@_action("panel.add")
+def _(states, payload, event):
+    canvas, _editor = states
+    current_tab = active_tab(canvas)
+    if current_tab is None:
+        return
+    kind = (payload or {}).get("kind", "timeseries")
+    if kind not in KIND_META:
+        kind = "timeseries"
+    current_tab["panels"].append(make_panel(canvas["next_panel_index"], kind))
+    canvas["next_panel_index"] += 1
+
+
+@_action("panel.delete")
+def _(states, payload, event):
+    canvas, editor = states
+    _folder, tab, panel = locate_panel(canvas, event.get("target"))
+    if tab is None or panel is None:
+        return
+    tab["panels"] = [p for p in tab["panels"] if p["id"] != panel["id"]]
+    if editor_targets_panel(editor, panel["id"]):
+        return canvas, close_editor_state()
+
+
+@_action("panel.duplicate")
+def _(states, payload, event):
+    canvas, _editor = states
+    _folder, tab, panel = locate_panel(canvas, event.get("target"))
+    if tab is None or panel is None:
+        return
+    tab["panels"].append(clone_panel(panel, canvas["next_panel_index"]))
+    canvas["next_panel_index"] += 1
+
+
+@_action("panel.lock.toggle")
+def _(states, payload, event):
+    canvas, _editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is not None:
+        panel["locked"] = not bool(panel.get("locked"))
+
+
+@_action("panel.link.toggle")
+def _(states, payload, event):
+    canvas, _editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is not None:
+        panel["linked"] = not bool(panel.get("linked"))
+
+
+@_action("panel.mode.set")
+def _(states, payload, event):
+    canvas, editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is None:
+        return
+    mode = (payload or {}).get("mode")
+    if mode in PANEL_MODES:
+        panel["active_mode"] = mode
+        if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
+            editor["draft"]["active_mode"] = mode
+
+
+@_action("panel.badge.add")
+def _(states, payload, event):
+    canvas, editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is None:
+        return
+    add_badge(panel)
+    if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
+        add_badge(editor["draft"])
+
+
+@_action("panel.badge.remove")
+def _(states, payload, event):
+    canvas, editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is None:
+        return
+    bidx = int((payload or {}).get("index", -1))
+    if 0 <= bidx < len(panel.get("badges", [])):
+        panel["badges"].pop(bidx)
+    if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
+        if 0 <= bidx < len(editor["draft"].get("badges", [])):
+            editor["draft"]["badges"].pop(bidx)
+
+
+@_action("panel.badge.cycle")
+def _(states, payload, event):
+    canvas, editor = states
+    panel = find_panel(canvas, event.get("target"))
+    if panel is None:
+        return
+    bidx = int((payload or {}).get("index", -1))
+    if 0 <= bidx < len(panel.get("badges", [])):
+        badge = panel["badges"][bidx]
+        badge["color"] = cycle_value(badge.get("color"), BADGE_COLORS)
+    if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
+        if 0 <= bidx < len(editor["draft"].get("badges", [])):
+            badge = editor["draft"]["badges"][bidx]
+            badge["color"] = cycle_value(badge.get("color"), BADGE_COLORS)
+
+
+@_action("panel.settings.open")
+def _(states, payload, event):
+    canvas, _editor = states
+    folder, tab, panel = locate_panel(canvas, event.get("target"))
+    if folder is None or tab is None or panel is None:
+        return
+    return canvas, copy_panel_to_editor(folder, tab, panel)
+
+
+# --- Pure-function dispatcher used by tests --------------------------------
+#
+# Tests call `demo.reduce_ui_event(canvas, editor, event)` directly without
+# constructing a Dash app. This wrapper preserves that interface by going
+# through the same `_ACTIONS` table the ld.handler() registry uses.
+
 
 def reduce_ui_event(
     canvas_state: dict[str, Any] | None,
     editor_state: dict[str, Any] | None,
     event: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = deepcopy(canvas_state or default_canvas_state())
-    editor = deepcopy(editor_state or default_editor_state())
+    canvas = deepcopy(canvas_state) if canvas_state is not None else default_canvas_state()
+    editor = deepcopy(editor_state) if editor_state is not None else default_editor_state()
 
-    if not event:
-        return state, editor
+    if not event or "action" not in event:
+        return canvas, editor
 
-    action = event.get("action")
-    target = event.get("target")
+    fn = _ACTIONS.get(event["action"])
+    if fn is None:
+        return canvas, editor
+
     payload = event.get("payload") or {}
-
-    if action == "folder.add":
-        new_tab = make_tab(state["next_tab_index"], title="Canvas")
-        state["next_tab_index"] += 1
-        new_folder = make_folder(state["next_folder_index"], [new_tab], title=f"Folder {state['next_folder_index']}")
-        state["next_folder_index"] += 1
-        state["folders"].append(new_folder)
-        state["active_folder_id"] = new_folder["id"]
-        return state, editor
-
-    if action == "folder.activate":
-        folder = find_folder(state, target)
-        if folder is not None:
-            state["active_folder_id"] = folder["id"]
-            ensure_folder_has_tab(state, folder)
-        return state, editor
-
-    if action == "folder.delete":
-        folder = find_folder(state, target)
-        if folder is None:
-            return state, editor
-        state["folders"] = [item for item in state["folders"] if item["id"] != target]
-        ensure_state_has_folder(state)
-        if editor_targets_folder(editor, target):
-            editor = close_editor_state()
-        return state, editor
-
-    if action == "folder.rename.open":
-        folder = find_folder(state, target)
-        return (state, copy_folder_to_editor(folder)) if folder else (state, editor)
-
-    current_folder = active_folder(state)
-    if current_folder is None:
-        ensure_state_has_folder(state)
-        current_folder = active_folder(state)
-
-    if action == "tab.add":
-        if current_folder is None:
-            return state, editor
-        new_tab = make_tab(state["next_tab_index"], title=f"Canvas {state['next_tab_index']}")
-        state["next_tab_index"] += 1
-        current_folder["tabs"].append(new_tab)
-        current_folder["active_tab_id"] = new_tab["id"]
-        return state, editor
-
-    if action == "tab.activate":
-        folder, tab = locate_tab(state, target)
-        if folder is not None and tab is not None:
-            state["active_folder_id"] = folder["id"]
-            folder["active_tab_id"] = tab["id"]
-        return state, editor
-
-    if action == "tab.delete":
-        folder, tab = locate_tab(state, target)
-        if folder is None or tab is None:
-            return state, editor
-        folder["tabs"] = [item for item in folder["tabs"] if item["id"] != tab["id"]]
-        ensure_folder_has_tab(state, folder)
-        if editor_targets_tab(editor, tab["id"]):
-            editor = close_editor_state()
-        if state.get("active_folder_id") == folder["id"]:
-            state["active_folder_id"] = folder["id"]
-        return state, editor
-
-    if action == "tab.rename.open":
-        folder, tab = locate_tab(state, target)
-        return (state, copy_tab_to_editor(folder, tab)) if folder and tab else (state, editor)
-
-    current_tab = active_tab(state)
-    if current_tab is None:
-        return state, editor
-
-    if action == "panel.add":
-        kind = payload.get("kind", "timeseries")
-        if kind not in KIND_META:
-            kind = "timeseries"
-        current_tab["panels"].append(make_panel(state["next_panel_index"], kind))
-        state["next_panel_index"] += 1
-        return state, editor
-
-    folder, tab, panel = locate_panel(state, target)
-    if folder is None or tab is None or panel is None:
-        return state, editor
-
-    if action == "panel.delete":
-        tab["panels"] = [item for item in tab["panels"] if item["id"] != panel["id"]]
-        if editor_targets_panel(editor, panel["id"]):
-            editor = close_editor_state()
-        return state, editor
-
-    if action == "panel.duplicate":
-        tab["panels"].append(clone_panel(panel, state["next_panel_index"]))
-        state["next_panel_index"] += 1
-        return state, editor
-
-    if action == "panel.lock.toggle":
-        panel["locked"] = not bool(panel.get("locked"))
-        return state, editor
-
-    if action == "panel.link.toggle":
-        panel["linked"] = not bool(panel.get("linked"))
-        return state, editor
-
-    if action == "panel.mode.set":
-        mode = payload.get("mode")
-        if mode in PANEL_MODES:
-            panel["active_mode"] = mode
-            if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
-                editor["draft"]["active_mode"] = mode
-        return state, editor
-
-    if action == "panel.badge.add":
-        add_badge(panel)
-        if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
-            add_badge(editor["draft"])
-        return state, editor
-
-    if action == "panel.badge.remove":
-        bidx = int(payload.get("index", -1))
-        if 0 <= bidx < len(panel.get("badges", [])):
-            panel["badges"].pop(bidx)
-        if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
-            if 0 <= bidx < len(editor["draft"].get("badges", [])):
-                editor["draft"]["badges"].pop(bidx)
-        return state, editor
-
-    if action == "panel.badge.cycle":
-        bidx = int(payload.get("index", -1))
-        if 0 <= bidx < len(panel.get("badges", [])):
-            badge = panel["badges"][bidx]
-            badge["color"] = cycle_value(badge.get("color"), BADGE_COLORS)
-        if editor_targets_panel(editor, panel["id"]) and editor.get("draft"):
-            if 0 <= bidx < len(editor["draft"].get("badges", [])):
-                badge = editor["draft"]["badges"][bidx]
-                badge["color"] = cycle_value(badge.get("color"), BADGE_COLORS)
-        return state, editor
-
-    if action == "panel.settings.open":
-        return state, copy_panel_to_editor(folder, tab, panel)
-
-    return state, editor
+    result = fn((canvas, editor), payload, event)
+    if result is None:
+        return canvas, editor
+    new_canvas, new_editor = result
+    return new_canvas, new_editor
 
 
 # --- Editor form helpers ---------------------------------------------------
@@ -1094,16 +1188,13 @@ def build_app() -> Dash:
     )
 
     # Callback 1: UI events → (canvas, editor)
-    @app.callback(
-        Output(CANVAS_STORE, "data"),
-        Output(EDITOR_STORE, "data"),
-        Input(UI_EVENT_BRIDGE, "data"),
-        State(CANVAS_STORE, "data"),
-        State(EDITOR_STORE, "data"),
-        prevent_initial_call=True,
-    )
-    def handle_ui_event(event, canvas_state, editor_state):
-        return reduce_ui_event(canvas_state, editor_state, event)
+    # ld.handler() registers one internal callback that reads the bridge,
+    # dispatches to the matching handler in _ACTIONS, and writes both
+    # state stores. The handlers below re-use the module-level _ACTIONS
+    # table so `reduce_ui_event` and this runtime path stay in sync.
+    events = ld.handler(app, state=[CANVAS_STORE, EDITOR_STORE], bridge=UI_EVENT_BRIDGE)
+    for _name, _fn in _ACTIONS.items():
+        events.on(_name)(_fn)
 
     # Callback 2: render workspace chrome
     @app.callback(
