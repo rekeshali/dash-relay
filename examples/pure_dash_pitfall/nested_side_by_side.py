@@ -1,0 +1,711 @@
+"""Nested dynamic surface: Folders -> Tabs -> Panels, two ways.
+
+The flat toggleable list in ``side_by_side.py`` is small enough that pure
+Dash is fine. This demo moves up to workspace-shaped complexity — three
+nested entity types, unbounded at each level, with ~9 action types — to
+show where approach A ("pattern-matching callbacks done right with the
+canonical guard") stops scaling cleanly.
+
+Both columns implement the same surface and call the same state-mutation
+helpers. The difference is the plumbing between the UI and those helpers.
+
+Run:
+    python examples/pure_dash_pitfall/nested_side_by_side.py
+
+Click around in either column and compare:
+  - callbacks registered (shown in each column header)
+  - round-trips per click (shown in each column's console)
+  - the code size needed to wire 9 actions (grep the Pure Dash section
+    vs the Liquid Dash section of this file).
+"""
+from __future__ import annotations
+
+import sys
+from copy import deepcopy
+from pathlib import Path
+
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+import liquid_dash as ld
+
+
+# ---------------------------------------------------------------------------
+# State model (shared between both columns)
+# ---------------------------------------------------------------------------
+
+
+KINDS = ("timeseries", "histogram", "scatter")
+
+
+def _new_id(state, kind):
+    key = f"next_{kind}_idx"
+    idx = state.get(key, 1)
+    state[key] = idx + 1
+    return f"{kind[0]}-{idx}"
+
+
+def _make_panel(pid, kind):
+    return {"id": pid, "name": f"Panel {pid}", "kind": kind, "locked": False}
+
+
+def _make_tab(tid, panels=None):
+    return {"id": tid, "name": f"Tab {tid}", "panels": panels or [], "active_panel": None}
+
+
+def _make_folder(fid, tabs=None):
+    tabs = tabs or []
+    return {
+        "id": fid,
+        "name": f"Folder {fid}",
+        "tabs": tabs,
+        "active_tab": tabs[0]["id"] if tabs else None,
+    }
+
+
+def initial_state():
+    state = {"folders": [], "active_folder": None, "next_folder_idx": 1, "next_tab_idx": 1, "next_panel_idx": 1}
+    # Seed with Folder 1 > Tab 1 > a couple panels so the demo opens non-empty.
+    fid = _new_id(state, "folder")
+    tid = _new_id(state, "tab")
+    pid1 = _new_id(state, "panel")
+    pid2 = _new_id(state, "panel")
+    tab = _make_tab(tid, [_make_panel(pid1, "timeseries"), _make_panel(pid2, "histogram")])
+    folder = _make_folder(fid, [tab])
+    state["folders"].append(folder)
+    state["active_folder"] = fid
+    return state
+
+
+def _find_folder(state, fid):
+    for f in state["folders"]:
+        if f["id"] == fid:
+            return f
+    return None
+
+
+def _find_tab(state, tid):
+    for f in state["folders"]:
+        for t in f["tabs"]:
+            if t["id"] == tid:
+                return f, t
+    return None, None
+
+
+def _find_panel(state, pid):
+    for f in state["folders"]:
+        for t in f["tabs"]:
+            for p in t["panels"]:
+                if p["id"] == pid:
+                    return f, t, p
+    return None, None, None
+
+
+def _active_folder(state):
+    return _find_folder(state, state.get("active_folder"))
+
+
+def _active_tab(state):
+    f = _active_folder(state)
+    if not f:
+        return None
+    return next((t for t in f["tabs"] if t["id"] == f.get("active_tab")), None)
+
+
+# ---------------------------------------------------------------------------
+# Action implementations (shared)
+# ---------------------------------------------------------------------------
+
+
+def do_folder_add(s):
+    fid = _new_id(s, "folder")
+    tid = _new_id(s, "tab")
+    s["folders"].append(_make_folder(fid, [_make_tab(tid)]))
+    s["active_folder"] = fid
+
+
+def do_folder_activate(s, target):
+    f = _find_folder(s, target)
+    if f is not None:
+        s["active_folder"] = f["id"]
+
+
+def do_folder_delete(s, target):
+    s["folders"] = [f for f in s["folders"] if f["id"] != target]
+    if s["active_folder"] == target:
+        s["active_folder"] = s["folders"][0]["id"] if s["folders"] else None
+
+
+def do_tab_add(s):
+    f = _active_folder(s)
+    if f is None:
+        return
+    tid = _new_id(s, "tab")
+    f["tabs"].append(_make_tab(tid))
+    f["active_tab"] = tid
+
+
+def do_tab_activate(s, target):
+    f, t = _find_tab(s, target)
+    if f is not None and t is not None:
+        s["active_folder"] = f["id"]
+        f["active_tab"] = t["id"]
+
+
+def do_tab_delete(s, target):
+    f, t = _find_tab(s, target)
+    if f is None or t is None:
+        return
+    f["tabs"] = [x for x in f["tabs"] if x["id"] != target]
+    if f["active_tab"] == target:
+        f["active_tab"] = f["tabs"][0]["id"] if f["tabs"] else None
+
+
+def do_panel_add(s, kind):
+    t = _active_tab(s)
+    if t is None:
+        return
+    if kind not in KINDS:
+        kind = "timeseries"
+    pid = _new_id(s, "panel")
+    t["panels"].append(_make_panel(pid, kind))
+
+
+def do_panel_delete(s, target):
+    f, t, p = _find_panel(s, target)
+    if t is None or p is None:
+        return
+    t["panels"] = [x for x in t["panels"] if x["id"] != target]
+
+
+def do_panel_duplicate(s, target):
+    f, t, p = _find_panel(s, target)
+    if t is None or p is None:
+        return
+    idx = t["panels"].index(p)
+    new = deepcopy(p)
+    new["id"] = _new_id(s, "panel")
+    new["name"] = p["name"] + " copy"
+    t["panels"].insert(idx + 1, new)
+
+
+# ---------------------------------------------------------------------------
+# Rendering (per-side because ID structures differ)
+# ---------------------------------------------------------------------------
+
+
+_CARD = {"display": "flex", "alignItems": "center", "gap": "6px", "padding": "6px 10px",
+         "borderWidth": "1px", "borderStyle": "solid", "borderColor": "#ccc",
+         "borderRadius": "6px", "background": "white",
+         "fontSize": "13px", "cursor": "default"}
+_ACTIVE = {"borderColor": "#3b82f6", "background": "#eff6ff"}
+_STRIP = {"display": "flex", "gap": "6px", "flexWrap": "wrap", "marginBottom": "8px"}
+_SECTION = {"marginBottom": "12px"}
+_LABEL = {"fontSize": "11px", "color": "#666", "textTransform": "uppercase",
+          "letterSpacing": "0.05em", "marginBottom": "4px"}
+_GRID = {"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "8px"}
+_PANEL_CARD = {"padding": "10px", "border": "1px solid #ddd", "borderRadius": "6px",
+               "background": "#fcfcfc", "display": "flex", "flexDirection": "column", "gap": "6px"}
+_KIND_BADGE = {"fontSize": "10px", "padding": "1px 6px", "background": "#e5e7eb",
+               "borderRadius": "10px", "color": "#374151", "alignSelf": "flex-start"}
+_BTN = {"padding": "2px 6px", "fontSize": "11px", "border": "1px solid #ccc",
+        "background": "white", "borderRadius": "4px", "cursor": "pointer"}
+
+
+def _render_pd_column(state):
+    active_fid = state.get("active_folder")
+    folder = _active_folder(state)
+    tab = _active_tab(state)
+
+    folder_tiles = []
+    for f in state["folders"]:
+        style = {**_CARD, **(_ACTIVE if f["id"] == active_fid else {})}
+        folder_tiles.append(html.Div([
+            html.Button(
+                f["name"],
+                id={"type": "pd-folder-activate", "target": f["id"]},
+                style={"border": "none", "background": "none", "cursor": "pointer",
+                       "padding": "0", "fontSize": "13px"},
+            ),
+            html.Button("×", id={"type": "pd-folder-delete", "target": f["id"]}, style=_BTN),
+        ], style=style))
+    folder_tiles.append(html.Button("+ Folder", id="pd-folder-add", style=_BTN))
+
+    tab_tiles = []
+    if folder:
+        for t in folder["tabs"]:
+            style = {**_CARD, **(_ACTIVE if tab and t["id"] == tab["id"] else {})}
+            tab_tiles.append(html.Div([
+                html.Button(
+                    t["name"],
+                    id={"type": "pd-tab-activate", "target": t["id"]},
+                    style={"border": "none", "background": "none", "cursor": "pointer",
+                           "padding": "0", "fontSize": "13px"},
+                ),
+                html.Button("×", id={"type": "pd-tab-delete", "target": t["id"]}, style=_BTN),
+            ], style=style))
+        tab_tiles.append(html.Button("+ Tab", id="pd-tab-add", style=_BTN))
+
+    panel_cards = []
+    if tab:
+        for p in tab["panels"]:
+            panel_cards.append(html.Div([
+                html.Div(p["name"], style={"fontWeight": "600", "fontSize": "13px"}),
+                html.Span(p["kind"], style=_KIND_BADGE),
+                html.Div([
+                    html.Button("dup", id={"type": "pd-panel-duplicate", "target": p["id"]}, style=_BTN),
+                    html.Button("×", id={"type": "pd-panel-delete", "target": p["id"]}, style=_BTN),
+                ], style={"display": "flex", "gap": "4px", "marginTop": "auto"}),
+            ], style=_PANEL_CARD))
+
+    add_panel_buttons = html.Div([
+        html.Button(
+            f"+ {k}",
+            id={"type": "pd-panel-add", "kind": k},
+            style=_BTN,
+        ) for k in KINDS
+    ], style={"display": "flex", "gap": "6px", "marginTop": "10px"})
+
+    return html.Div([
+        html.Div([
+            html.Div("Folders", style=_LABEL),
+            html.Div(folder_tiles, style=_STRIP),
+        ], style=_SECTION),
+        html.Div([
+            html.Div("Tabs (active folder)", style=_LABEL),
+            html.Div(tab_tiles, style=_STRIP) if tab_tiles else html.Div("no folder selected", style={"color": "#999"}),
+        ], style=_SECTION),
+        html.Div([
+            html.Div("Panels (active tab)", style=_LABEL),
+            html.Div(panel_cards, style=_GRID) if panel_cards else html.Div("no tab selected", style={"color": "#999"}),
+            add_panel_buttons if tab else html.Span(),
+        ], style=_SECTION),
+    ])
+
+
+def _render_ld_column(state):
+    active_fid = state.get("active_folder")
+    folder = _active_folder(state)
+    tab = _active_tab(state)
+
+    folder_tiles = []
+    for f in state["folders"]:
+        style = {**_CARD, **(_ACTIVE if f["id"] == active_fid else {})}
+        folder_tiles.append(html.Div([
+            ld.on(
+                html.Button(f["name"], style={"border": "none", "background": "none",
+                                              "cursor": "pointer", "padding": "0", "fontSize": "13px"}),
+                "folder.activate", target=f["id"], to="ld-bridge",
+            ),
+            ld.on(html.Button("×", style=_BTN), "folder.delete", target=f["id"], to="ld-bridge"),
+        ], style=style))
+    folder_tiles.append(ld.on(html.Button("+ Folder", style=_BTN), "folder.add", to="ld-bridge"))
+
+    tab_tiles = []
+    if folder:
+        for t in folder["tabs"]:
+            style = {**_CARD, **(_ACTIVE if tab and t["id"] == tab["id"] else {})}
+            tab_tiles.append(html.Div([
+                ld.on(
+                    html.Button(t["name"], style={"border": "none", "background": "none",
+                                                  "cursor": "pointer", "padding": "0", "fontSize": "13px"}),
+                    "tab.activate", target=t["id"], to="ld-bridge",
+                ),
+                ld.on(html.Button("×", style=_BTN), "tab.delete", target=t["id"], to="ld-bridge"),
+            ], style=style))
+        tab_tiles.append(ld.on(html.Button("+ Tab", style=_BTN), "tab.add", to="ld-bridge"))
+
+    panel_cards = []
+    if tab:
+        for p in tab["panels"]:
+            panel_cards.append(html.Div([
+                html.Div(p["name"], style={"fontWeight": "600", "fontSize": "13px"}),
+                html.Span(p["kind"], style=_KIND_BADGE),
+                html.Div([
+                    ld.on(html.Button("dup", style=_BTN), "panel.duplicate", target=p["id"], to="ld-bridge"),
+                    ld.on(html.Button("×", style=_BTN), "panel.delete", target=p["id"], to="ld-bridge"),
+                ], style={"display": "flex", "gap": "4px", "marginTop": "auto"}),
+            ], style=_PANEL_CARD))
+
+    add_panel_buttons = html.Div([
+        ld.on(html.Button(f"+ {k}", style=_BTN), "panel.add", payload={"kind": k}, to="ld-bridge")
+        for k in KINDS
+    ], style={"display": "flex", "gap": "6px", "marginTop": "10px"})
+
+    return html.Div([
+        html.Div([
+            html.Div("Folders", style=_LABEL),
+            html.Div(folder_tiles, style=_STRIP),
+        ], style=_SECTION),
+        html.Div([
+            html.Div("Tabs (active folder)", style=_LABEL),
+            html.Div(tab_tiles, style=_STRIP) if tab_tiles else html.Div("no folder selected", style={"color": "#999"}),
+        ], style=_SECTION),
+        html.Div([
+            html.Div("Panels (active tab)", style=_LABEL),
+            html.Div(panel_cards, style=_GRID) if panel_cards else html.Div("no tab selected", style={"color": "#999"}),
+            add_panel_buttons if tab else html.Span(),
+        ], style=_SECTION),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# App + console interceptor
+# ---------------------------------------------------------------------------
+
+
+_CONSOLE_JS = r"""
+<script>
+(function () {
+  if (window.__nestedSbsInstalled) return;
+  window.__nestedSbsInstalled = true;
+  var origFetch = window.fetch;
+  function append(side, line) {
+    var el = document.getElementById(side + "-console");
+    if (!el) return;
+    var div = document.createElement("div");
+    div.textContent = line;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    while (el.children.length > 200) el.removeChild(el.firstChild);
+  }
+  function sideOf(out) {
+    if (typeof out !== "string") return null;
+    if (out.indexOf("pd-") === 0) return "pd";
+    if (out.indexOf("ld-") === 0) return "ld";
+    return null;
+  }
+  function shortTrig(ids) {
+    if (!ids || !ids.length) return "(init)";
+    return ids.map(function (s) {
+      return s.replace(/"/g, "").replace(/[\{\}]/g, "").replace(/\.n_clicks$/, "");
+    }).join(", ");
+  }
+  window.fetch = function () {
+    var args = arguments;
+    var url = typeof args[0] === "string" ? args[0] : args[0].url;
+    if (!url || url.indexOf("_dash-update-component") < 0) {
+      return origFetch.apply(this, args);
+    }
+    var body = null;
+    try { body = JSON.parse(args[1].body); } catch (e) {}
+    var out = body && body.output;
+    var trig = body && body.changedPropIds;
+    var side = sideOf(out);
+    if (side) {
+      var t = new Date();
+      var stamp = String(t.getMinutes()).padStart(2, "0") + ":" +
+                  String(t.getSeconds()).padStart(2, "0") + "." +
+                  String(t.getMilliseconds()).padStart(3, "0");
+      var label = (out || "?").split("@")[0];
+      append(side, stamp + "  " + label + "  <-  " + shortTrig(trig));
+    }
+    return origFetch.apply(this, args);
+  };
+})();
+</script>
+"""
+
+
+app = Dash(__name__, suppress_callback_exceptions=True)
+ld.melt(app)
+app.index_string = app.index_string.replace("<head>", "<head>" + _CONSOLE_JS, 1)
+
+
+# ---------------------------------------------------------------------------
+# Pure Dash column (approach A done right)
+#
+# One callback per action type. Dynamic entities use pattern-matching IDs
+# (ALL). Each pattern-matching callback uses the canonical guard
+# `if not ctx.triggered_id or ctx.triggered[0]["value"] is None: return no_update`
+# so phantom fires from changing matched sets don't mutate state. All nine
+# action callbacks share the single Output("pd-state","data") with
+# allow_duplicate=True.
+# ---------------------------------------------------------------------------
+
+
+def _pd_guard():
+    """Return True iff this callback was actually triggered by a real click."""
+    return bool(ctx.triggered_id) and ctx.triggered and ctx.triggered[0]["value"] is not None
+
+
+@app.callback(
+    Output("pd-root", "children"),
+    Input("pd-state", "data"),
+)
+def pd_render(state):
+    return _render_pd_column(state)
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input("pd-folder-add", "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_folder_add(_n, s):
+    if _n is None:
+        return no_update
+    do_folder_add(s)
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-folder-activate", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_folder_activate(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_folder_activate(s, ctx.triggered_id["target"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-folder-delete", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_folder_delete(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_folder_delete(s, ctx.triggered_id["target"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input("pd-tab-add", "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_tab_add(_n, s):
+    if _n is None:
+        return no_update
+    do_tab_add(s)
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-tab-activate", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_tab_activate(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_tab_activate(s, ctx.triggered_id["target"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-tab-delete", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_tab_delete(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_tab_delete(s, ctx.triggered_id["target"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-panel-add", "kind": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_panel_add(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_panel_add(s, ctx.triggered_id["kind"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-panel-delete", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_panel_delete(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_panel_delete(s, ctx.triggered_id["target"])
+    return s
+
+
+@app.callback(
+    Output("pd-state", "data", allow_duplicate=True),
+    Input({"type": "pd-panel-duplicate", "target": ALL}, "n_clicks"),
+    State("pd-state", "data"),
+    prevent_initial_call=True,
+)
+def pd_panel_duplicate(_clicks, s):
+    if not _pd_guard():
+        return no_update
+    do_panel_duplicate(s, ctx.triggered_id["target"])
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Liquid Dash column
+#
+# One bridge. One dispatch callback (registered by ld.handler). One renderer.
+# Nine handlers registered against the bridge, each just calls the shared
+# do_* helper. The callback graph is the same whether we have 9 actions or
+# 90.
+# ---------------------------------------------------------------------------
+
+
+events = ld.handler(app, state="ld-state", bridge="ld-bridge")
+
+
+@events.on("folder.add")
+def _(s, payload, event):
+    do_folder_add(s)
+
+
+@events.on("folder.activate")
+def _(s, payload, event):
+    do_folder_activate(s, event["target"])
+
+
+@events.on("folder.delete")
+def _(s, payload, event):
+    do_folder_delete(s, event["target"])
+
+
+@events.on("tab.add")
+def _(s, payload, event):
+    do_tab_add(s)
+
+
+@events.on("tab.activate")
+def _(s, payload, event):
+    do_tab_activate(s, event["target"])
+
+
+@events.on("tab.delete")
+def _(s, payload, event):
+    do_tab_delete(s, event["target"])
+
+
+@events.on("panel.add")
+def _(s, payload, event):
+    do_panel_add(s, (payload or {}).get("kind", "timeseries"))
+
+
+@events.on("panel.delete")
+def _(s, payload, event):
+    do_panel_delete(s, event["target"])
+
+
+@events.on("panel.duplicate")
+def _(s, payload, event):
+    do_panel_duplicate(s, event["target"])
+
+
+@app.callback(Output("ld-root", "children"), Input("ld-state", "data"))
+def ld_render(state):
+    return _render_ld_column(state)
+
+
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+
+
+_CONSOLE_STYLE = {
+    "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+    "fontSize": "11px",
+    "background": "#0e1014",
+    "color": "#9eff9e",
+    "padding": "8px 10px",
+    "height": "220px",
+    "overflowY": "auto",
+    "borderRadius": "4px",
+    "border": "1px solid #2a2a2a",
+    "marginTop": "8px",
+    "lineHeight": "1.5",
+}
+
+
+# Count callbacks once at startup for each side. We re-filter the map by
+# output-id prefix so the numbers are honest.
+def _count_callbacks(prefix):
+    count = 0
+    for key in app.callback_map.keys():
+        # Multi-output keys look like "out1...out2"; single like "pd-state.data"
+        if prefix in key:
+            count += 1
+    return count
+
+
+_PD_CB_COUNT = _count_callbacks("pd-")
+_LD_CB_COUNT = _count_callbacks("ld-")
+
+
+def _column(title, cb_count, root_id, console_id):
+    return html.Div([
+        html.Div([
+            html.H2(title, style={"margin": 0}),
+            html.Span(
+                f"{cb_count} callbacks registered",
+                style={"marginLeft": "12px", "fontSize": "12px", "color": "#666",
+                       "fontFamily": "ui-monospace, monospace"},
+            ),
+        ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "16px"}),
+        html.Div(id=root_id),
+        html.Hr(),
+        html.Div("callback activity (live):",
+                 style={"fontSize": "12px", "color": "#666"}),
+        html.Div(id=console_id, style=_CONSOLE_STYLE),
+    ], style={
+        "padding": "20px",
+        "border": "1px solid #ddd",
+        "borderRadius": "8px",
+        "background": "#fafafa",
+        "flex": 1,
+        "minWidth": 0,
+    })
+
+
+app.layout = html.Div([
+    html.H1(
+        "Dynamically Generated Nested Components: Pure Dash vs. Liquid Dash",
+        style={"marginBottom": "4px"},
+    ),
+    html.P(
+        "Folders contain tabs, tabs contain panels. Nine action types across "
+        "three entity levels. Both columns run the same mutation logic; only "
+        "the wiring between the UI and that logic differs.",
+        style={"color": "#555", "marginTop": 0, "marginBottom": "20px"},
+    ),
+    dcc.Store(id="pd-state", data=initial_state()),
+    dcc.Store(id="ld-state", data=initial_state()),
+    ld.bridge("ld-bridge"),
+    html.Div([
+        _column("Pure Dash", _PD_CB_COUNT, "pd-root", "pd-console"),
+        _column("Liquid Dash", _LD_CB_COUNT, "ld-root", "ld-console"),
+    ], style={"display": "flex", "gap": "20px", "alignItems": "stretch"}),
+], style={
+    "fontFamily": "system-ui, -apple-system, sans-serif",
+    "padding": "24px",
+    "maxWidth": "1500px",
+    "margin": "0 auto",
+})
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
