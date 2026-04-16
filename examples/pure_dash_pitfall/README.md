@@ -9,93 +9,97 @@ side, so you can *see* the difference in callback activity.
 python examples/pure_dash_pitfall/side_by_side.py
 ```
 
-The two columns look identical to a user. Their consoles do not.
+Both columns are functionally correct. Their consoles tell you why one
+takes more code to keep correct than the other.
 
-## Three patterns where pure-Dash gets noisy
+## What you're looking at
 
-### 1. Pattern-matching Inputs subscribe to layout
+Both columns share the same UI: two starting items, an **Add item**
+button, a **Toggle filter** button, and per-row toggle/delete buttons.
+Both implementations work. The contrast is in the cost of correctness.
 
-Pattern-matching Inputs like `Input({"type": "del", "index": ALL},
-"n_clicks")` subscribe to *every* component in the layout that matches
-the pattern. When the layout re-renders and adds a new matching
-component, the callback's input list changes — so Dash fires it.
+## The patterns at a glance
 
-Click **Add item** in the pure-Dash column: the delete and toggle
-callbacks both fire as their input lists grow, even though nobody
-clicked delete or toggle. Whether `ctx.triggered_id` is set or `None`
-depends on Dash's matching rules at the moment, so an `if not
-ctx.triggered_id` guard isn't always enough — the body can still run
-and mutate state.
+### Pure-Dash column
 
-The Liquid Dash column has exactly one Input on the bridge store. The
-store only updates when a real DOM event reaches it. Mounting new
-buttons does nothing.
+- One `Output("state", "data")` callback per action type. With four
+  actions (filter, add, delete, toggle), that's four writers to the
+  same store and a fifth callback for the renderer.
+- The two per-row actions (delete, toggle) use pattern-matching
+  Inputs (`Input({"type": "del", "index": ALL}, "n_clicks")`).
+- `allow_duplicate=True` is required on three of the four writers so
+  more than one callback can target the same `Output`.
 
-### 2. Many writers to the same Store
+### Liquid Dash column
+
+- One client-side bridge (`dcc.Store`) receives every event.
+- One server-side dispatch callback reads from the bridge and writes
+  to the state store. That's it — two callbacks total, regardless of
+  how many actions exist.
+- Per-action handlers are registered against the dispatch callback
+  via `@events.on("action")`.
+
+## Where pure-Dash gets noisier
+
+Watch the console while you click.
+
+### Pattern-matching Inputs fire whenever the matched set changes
+
+`Input({"type": "del", "index": ALL}, "n_clicks")` re-fires whenever
+the *set of matching components* changes — adding an item, deleting
+one, or filtering items in/out of the visible list all trigger it,
+even when no delete button was actually clicked.
+
+The fire returns `no_update` if the handler uses the canonical guard:
+
+```python
+if not ctx.triggered_id or ctx.triggered[0]["value"] is None:
+    return no_update
+```
+
+Without that guard (or with the weaker `if not ctx.triggered_id`
+alone), the body runs on phantom fires and silently mutates state.
+Every pattern-matching ALL handler in your app needs to remember to
+write the canonical guard.
+
+The Liquid Dash column has one Input on the bridge store. The store
+only updates when a real DOM event reaches it — adding, deleting, or
+filtering rows triggers no extra dispatches.
+
+### Round-trips per click scale with action types
+
+Counted from the in-page consoles:
+
+| | callbacks registered | round-trips per Add click |
+|---|---|---|
+| pure-Dash column | 5 (filter, add, delete, toggle, render) | 4 (add + render + 2 phantom round-trips that no_update) |
+| Liquid Dash column | 2 (dispatch + render) | 2 (dispatch + render) |
+
+The pure-Dash count grows with the number of action types and the
+phantom round-trips grow with the number of pattern-matching
+subscribers. Liquid Dash stays at 2 callbacks and 2 round-trips per
+click no matter how many actions you add.
+
+### Multiple writers + `allow_duplicate`
 
 The pure-Dash column has four callbacks writing to `Output("state",
-"data", allow_duplicate=True)`. If two of them fire in the same round
-(double-click, fast keyboard, network delay coalescing), each reads the
-current state and writes back its independent version. One write wins;
-the other is silently overwritten.
+"data", allow_duplicate=True)`. Dash queues callbacks and dispatches
+them serially within a request, so the everyday case is fine. The
+risk is at scale: more writers + more pattern subscribers + faster
+input cadence eventually hits coordination problems that production
+apps solve with an idempotency layer or a single reducer.
 
-`allow_duplicate=True` exists for this case and the Dash docs flag it.
-Production apps that grow this pattern eventually add an idempotency
-layer, an external state machine, or a Redux-style single reducer.
+The Liquid Dash column has one writer (`handler`'s dispatch callback)
+against a single `Output`. There's nothing to coordinate.
 
-The Liquid Dash column has exactly one writer (`handler`'s internal
-dispatch callback). Updates are linearized by Dash's normal callback
-ordering against a single Output.
+## What Liquid Dash gives up to do this
 
-### 3. `n_clicks` lives in the DOM tree
+Liquid Dash adds a client-side script (~120 lines) and one wrapper
+`html.Div` per interactive element. Events flow through `dcc.Store`
+which means they're not in the standard Dash callback graph — tools
+that introspect the graph (e.g. the dev panel's callback view) won't
+show per-action handlers, only the single dispatch callback.
 
-`html.Button` carries its click count in the component's `n_clicks`
-prop. When a component is unmounted and a new one with the same id
-appears, Dash's reconciliation may carry the prior `n_clicks` value
-forward — version-dependent and timing-dependent — which can fire the
-callback as if the button were just clicked.
-
-To reproduce: toggle item 2 (it becomes done), switch filter to "open"
-(item 2 disappears), switch back to "all" (item 2 reappears).
-Reconciliation usually does the right thing, but you're trusting it
-across rebuilds.
-
-The Liquid Dash column doesn't read state from component props. The
-toggle action is sent on the click event itself; remounting carries no
-history.
-
-## Why the contrast matters
-
-The pure-Dash column isn't naive — every guard and `prevent_initial_call`
-flag is in the right place. The extra activity comes from the patterns,
-not sloppiness:
-
-- **Pattern-matching Inputs** subscribe to layout, so layout changes
-  fire callbacks.
-- **`allow_duplicate=True`** is the official escape hatch when many
-  callbacks want to update one Store, and it leaves the linearization
-  to Dash's callback ordering.
-- **Component-prop click counters** put click history inside the DOM
-  tree, so reconciliation has to preserve or reset that history.
-
-Liquid Dash sidesteps the patterns rather than fighting them: events
-ride on actual DOM events through one client-side handler, deliver to
-one store, and one server-side reducer transforms state. Same Dash,
-same components, fewer moving parts that can interact unexpectedly.
-
-## Callback graph size
-
-Counted at load time:
-
-| | callbacks registered |
-|---|---|
-| pure-Dash column | **5** (one per action type, plus the renderer) |
-| Liquid Dash column | **2** (bridge dispatch + renderer) |
-
-The pure-Dash count grows with the number of action types; Liquid Dash
-stays at 2 no matter how many actions you add.
-
-What grows with list size in the pure-Dash column is **callback
-firings per user interaction**, not just registrations — every
-ALL-pattern subscriber re-evaluates whenever the matching layout
-subset changes.
+If your app is a static layout with a fixed number of interactions,
+plain Dash is simpler. Liquid Dash earns its keep when the layout is
+dynamic and the number of action types is growing.

@@ -156,7 +156,10 @@ def pd_add(_n, s):
     prevent_initial_call=True,
 )
 def pd_delete(_clicks, s):
-    if not ctx.triggered_id:
+    # Canonical guard for pattern-matching callbacks: also verify the triggered
+    # input has a non-None value, which distinguishes a real click from a
+    # phantom fire caused by the matching component set changing.
+    if not ctx.triggered_id or ctx.triggered[0]["value"] is None:
         return no_update
     tid = ctx.triggered_id["index"]
     s["items"] = [i for i in s["items"] if i["id"] != tid]
@@ -170,7 +173,8 @@ def pd_delete(_clicks, s):
     prevent_initial_call=True,
 )
 def pd_toggle(_clicks, s):
-    if not ctx.triggered_id:
+    # Canonical guard for pattern-matching callbacks: see pd_delete for rationale.
+    if not ctx.triggered_id or ctx.triggered[0]["value"] is None:
         return no_update
     tid = ctx.triggered_id["index"]
     for i in s["items"]:
