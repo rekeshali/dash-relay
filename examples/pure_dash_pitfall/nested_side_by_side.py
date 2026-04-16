@@ -379,6 +379,35 @@ _CONSOLE_JS = r"""
     font-size: 11px; color: #555;
   }
   .tl-summary b { color: #111; font-weight: 600; }
+
+  .cmp-panel {
+    position: fixed; top: 20px; right: 20px; width: 240px;
+    padding: 16px; background: white;
+    border: 1px solid #ddd; border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    z-index: 100;
+    font-family: system-ui, -apple-system, sans-serif; font-size: 12px;
+  }
+  .cmp-panel h3 { margin: 0 0 10px 0; font-size: 13px; letter-spacing: 0.02em; }
+  .cmp-panel .cmp-runbtn {
+    display: block; width: 100%;
+    padding: 6px 10px; background: #111; color: white; border: 0;
+    border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .cmp-panel .cmp-runbtn:hover { background: #333; }
+  .cmp-panel .cmp-runbtn:disabled { background: #999; cursor: wait; }
+  .cmp-results { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .cmp-results .cmp-metric { border-top: 1px solid #eee; padding-top: 8px; }
+  .cmp-results .cmp-label { color: #666; font-size: 11px; margin-bottom: 2px; }
+  .cmp-results .cmp-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: #555;
+  }
+  .cmp-results .cmp-pct { font-size: 22px; font-weight: 700; color: #111; }
+  .cmp-results .cmp-dir { font-size: 11px; color: #666; margin-left: 6px; }
+  .cmp-results .cmp-win { color: #1f8a4c; }
+  .cmp-results .cmp-loss { color: #c43838; }
+  .cmp-empty { color: #888; font-style: italic; font-size: 11px; }
   .tl-row {
     display: flex; align-items: center; gap: 8px;
     padding: 4px 6px; border-bottom: 1px solid #eee;
@@ -464,14 +493,19 @@ _CONSOLE_JS = r"""
   function finalizeRow(side) {
     var st = tlState[side];
     if (!st.row) return;
-    var dur = Date.now() - st.start;
+    // Use last-round-trip timestamp (not now()) so the 600ms idle-finalize
+    // window doesn't inflate the reported duration. That way "Total time"
+    // reflects real click→last-response latency, not the debounce tail.
+    var endTs = st.lastRtTime || st.start;
+    var dur = Math.max(0, endTs - st.start);
     var bytes = parseInt(st.row.dataset.bytes || "0", 10);
     var d = st.row.querySelector(".tl-duration");
     if (d) d.textContent = fmtBytes(bytes) + " · " + dur + "ms";
     st.row.classList.remove("tl-pending");
     st.row = null;
+    st.lastRtTime = 0;
     if (st.timer) { clearTimeout(st.timer); st.timer = null; }
-    // Account the row's wall-clock duration against the side's running total.
+    // Account the row's real click→last-RT duration against the running total.
     totals[side].time_ms += dur;
     refreshSummary(side);
   }
@@ -521,6 +555,7 @@ _CONSOLE_JS = r"""
     }
     var row = st.row;
     row.dataset.bytes = String(parseInt(row.dataset.bytes || "0", 10) + bytes);
+    tlState[side].lastRtTime = Date.now();
     var dots = row.querySelector(".tl-dots");
     var d = document.createElement("span");
     d.className = "tl-rt-dot";
@@ -653,14 +688,71 @@ _CONSOLE_JS = r"""
   }
   window.__runNestedTest = runTest;  // expose for tests
 
+  // ---- Side-by-side comparison: run both tests, wire deltas to panel ----
+  function snapTotals() {
+    return {
+      pd: { trips: totals.pd.trips, bytes: totals.pd.bytes, time_ms: totals.pd.time_ms },
+      ld: { trips: totals.ld.trips, bytes: totals.ld.bytes, time_ms: totals.ld.time_ms },
+    };
+  }
+
+  function diff(a, b) {
+    return { trips: a.trips - b.trips, bytes: a.bytes - b.bytes, time_ms: a.time_ms - b.time_ms };
+  }
+
+  // Returns percent reduction from pd to ld. Positive = LD smaller.
+  function pctReduction(pd, ld) {
+    if (pd === 0) return ld === 0 ? 0 : -Infinity;
+    return Math.round(((pd - ld) / pd) * 100);
+  }
+
+  function metricRow(label, pdVal, ldVal, pdFmt, ldFmt, winWord, loseWord) {
+    var pct = pctReduction(pdVal, ldVal);
+    var cls = pct >= 0 ? "cmp-win" : "cmp-loss";
+    var word = pct >= 0 ? winWord : loseWord;
+    var shown = pct === -Infinity ? "∞" : Math.abs(pct);
+    return '<div class="cmp-metric">' +
+      '<div class="cmp-label">' + label + '</div>' +
+      '<div><span class="cmp-pct ' + cls + '">' + shown + '%</span>' +
+      '<span class="cmp-dir">' + word + ' (LD)</span></div>' +
+      '<div class="cmp-value">' + pdFmt + ' → ' + ldFmt + '</div>' +
+      '</div>';
+  }
+
+  function renderCompare(pdDelta, ldDelta) {
+    var el = document.getElementById("cmp-results");
+    if (!el) return;
+    el.innerHTML =
+      metricRow("Round-trips", pdDelta.trips, ldDelta.trips,
+                pdDelta.trips, ldDelta.trips, "fewer", "more") +
+      metricRow("Data sent", pdDelta.bytes, ldDelta.bytes,
+                fmtBytes(pdDelta.bytes), fmtBytes(ldDelta.bytes),
+                "less", "more") +
+      metricRow("Wall time", pdDelta.time_ms, ldDelta.time_ms,
+                fmtTime(pdDelta.time_ms), fmtTime(ldDelta.time_ms),
+                "faster", "slower");
+  }
+
+  async function runBothTests() {
+    var cmpBtn = document.getElementById("cmp-runbtn");
+    if (cmpBtn) cmpBtn.disabled = true;
+    var before = snapTotals();
+    await Promise.all([runTest("pd"), runTest("ld")]);
+    var after = snapTotals();
+    renderCompare(diff(after.pd, before.pd), diff(after.ld, before.ld));
+    if (cmpBtn) cmpBtn.disabled = false;
+  }
+
   // Wire run buttons once the Dash layout has mounted them.
   var wireTries = 0;
   function tryWire() {
     var pdBtn = document.getElementById("pd-runbtn");
     var ldBtn = document.getElementById("ld-runbtn");
-    if (pdBtn && ldBtn) {
+    var cmpBtn = document.getElementById("cmp-runbtn");
+    if (pdBtn && ldBtn && cmpBtn) {
       pdBtn.addEventListener("click", function () { runTest("pd"); });
       ldBtn.addEventListener("click", function () { runTest("ld"); });
+      cmpBtn.addEventListener("click", function () { runBothTests(); });
       refreshSummary("pd");
       refreshSummary("ld");
       return;
@@ -967,13 +1059,16 @@ _LD_LINES = _count_source_lines("LD-ACTIONS-BEGIN", "LD-ACTIONS-END")
 def _column(title, badges, root_id, timeline_id, console_id, summary_id, runbtn_id):
     stat_style = {"fontSize": "11px", "color": "#666",
                   "fontFamily": "ui-monospace, monospace",
-                  "padding": "2px 8px", "background": "#eee", "borderRadius": "10px"}
+                  "padding": "2px 8px", "background": "#eee", "borderRadius": "10px",
+                  "whiteSpace": "nowrap", "flexShrink": 0}
     return html.Div([
         html.Div([
-            html.H2(title, style={"margin": 0}),
+            html.H2(title, style={"margin": 0, "whiteSpace": "nowrap", "flexShrink": 0}),
             *[html.Span(b, style=stat_style) for b in badges],
-            html.Button("\u25b6 Run test", id=runbtn_id, className="tl-runbtn"),
-        ], style={"display": "flex", "alignItems": "center", "gap": "8px", "marginBottom": "16px"}),
+            html.Button("\u25b6 Run test", id=runbtn_id, className="tl-runbtn",
+                        style={"whiteSpace": "nowrap", "flexShrink": 0}),
+        ], style={"display": "flex", "alignItems": "center", "gap": "8px",
+                  "marginBottom": "16px", "flexWrap": "wrap"}),
         html.Div(id=root_id),
         html.Hr(),
         html.Div([
@@ -1000,7 +1095,23 @@ def _column(title, badges, root_id, timeline_id, console_id, summary_id, runbtn_
     })
 
 
+_compare_panel = html.Div(
+    [
+        html.H3("Head-to-head"),
+        html.Button("\u25b6 Run both tests", id="cmp-runbtn", className="cmp-runbtn"),
+        html.Div(
+            html.Div("Click to run the same 9-step test on both sides.",
+                     className="cmp-empty"),
+            id="cmp-results",
+            className="cmp-results",
+        ),
+    ],
+    className="cmp-panel",
+)
+
+
 app.layout = html.Div([
+    _compare_panel,
     html.H1(
         "Dynamically Generated Nested Components: Pure Dash vs. Liquid Dash",
         style={"marginBottom": "4px"},
@@ -1030,7 +1141,8 @@ app.layout = html.Div([
 ], style={
     "fontFamily": "system-ui, -apple-system, sans-serif",
     "padding": "24px",
-    "maxWidth": "1500px",
+    "paddingRight": "290px",  # keep content clear of the fixed compare panel
+    "maxWidth": "1700px",
     "margin": "0 auto",
 })
 
