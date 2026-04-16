@@ -471,6 +471,9 @@ _CONSOLE_JS = r"""
     st.row.classList.remove("tl-pending");
     st.row = null;
     if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+    // Account the row's wall-clock duration against the side's running total.
+    totals[side].time_ms += dur;
+    refreshSummary(side);
   }
 
   function scheduleFinalize(side) {
@@ -538,9 +541,13 @@ _CONSOLE_JS = r"""
 
   // Running totals per side
   var totals = {
-    pd: { runs: 0, trips: 0, bytes: 0 },
-    ld: { runs: 0, trips: 0, bytes: 0 },
+    pd: { runs: 0, trips: 0, bytes: 0, time_ms: 0 },
+    ld: { runs: 0, trips: 0, bytes: 0, time_ms: 0 },
   };
+  function fmtTime(ms) {
+    if (ms < 1000) return ms + " ms";
+    return (ms / 1000).toFixed(1) + " s";
+  }
   function refreshSummary(side) {
     var el = document.getElementById(side + "-summary");
     if (!el) return;
@@ -548,7 +555,8 @@ _CONSOLE_JS = r"""
     el.innerHTML =
       '<span>Tests run: <b>' + t.runs + '</b></span>' +
       '<span>Round-trips: <b>' + t.trips + '</b></span>' +
-      '<span>Total: <b>' + fmtBytes(t.bytes) + '</b></span>';
+      '<span>Total: <b>' + fmtBytes(t.bytes) + '</b></span>' +
+      '<span>Total time: <b>' + fmtTime(t.time_ms) + '</b></span>';
   }
 
   window.fetch = function () {
@@ -947,19 +955,23 @@ def _count_source_lines(begin_marker, end_marker):
 
 _PD_CB_COUNT = _count_callbacks("pd-")
 _LD_CB_COUNT = _count_callbacks("ld-")
+# Liquid Dash also has per-action reducers registered via @events.on(...).
+# They're not in the Dash callback graph (one Dash dispatch callback routes
+# to all of them by action name), so they don't inflate phantom-fire cost
+# the way pattern-matching callbacks do. But they're still code we wrote.
+_LD_REDUCER_COUNT = len(events._handlers)
 _PD_LINES = _count_source_lines("PD-ACTIONS-BEGIN", "PD-ACTIONS-END")
 _LD_LINES = _count_source_lines("LD-ACTIONS-BEGIN", "LD-ACTIONS-END")
 
 
-def _column(title, cb_count, line_count, root_id, timeline_id, console_id, summary_id, runbtn_id):
+def _column(title, badges, root_id, timeline_id, console_id, summary_id, runbtn_id):
     stat_style = {"fontSize": "11px", "color": "#666",
                   "fontFamily": "ui-monospace, monospace",
                   "padding": "2px 8px", "background": "#eee", "borderRadius": "10px"}
     return html.Div([
         html.Div([
             html.H2(title, style={"margin": 0}),
-            html.Span(f"{cb_count} callbacks", style=stat_style),
-            html.Span(f"{line_count} lines of wiring", style=stat_style),
+            *[html.Span(b, style=stat_style) for b in badges],
             html.Button("\u25b6 Run test", id=runbtn_id, className="tl-runbtn"),
         ], style={"display": "flex", "alignItems": "center", "gap": "8px", "marginBottom": "16px"}),
         html.Div(id=root_id),
@@ -1003,10 +1015,17 @@ app.layout = html.Div([
     dcc.Store(id="ld-state", data=initial_state()),
     ld.bridge("ld-bridge"),
     html.Div([
-        _column("Pure Dash", _PD_CB_COUNT, _PD_LINES, "pd-root", "pd-timeline",
-                "pd-console", "pd-summary", "pd-runbtn"),
-        _column("Liquid Dash", _LD_CB_COUNT, _LD_LINES, "ld-root", "ld-timeline",
-                "ld-console", "ld-summary", "ld-runbtn"),
+        _column(
+            "Pure Dash",
+            [f"{_PD_CB_COUNT} callbacks", f"{_PD_LINES} lines of wiring"],
+            "pd-root", "pd-timeline", "pd-console", "pd-summary", "pd-runbtn",
+        ),
+        _column(
+            "Liquid Dash",
+            [f"{_LD_CB_COUNT} callbacks + {_LD_REDUCER_COUNT} reducers",
+             f"{_LD_LINES} lines of wiring"],
+            "ld-root", "ld-timeline", "ld-console", "ld-summary", "ld-runbtn",
+        ),
     ], style={"display": "flex", "gap": "20px", "alignItems": "stretch"}),
 ], style={
     "fontFamily": "system-ui, -apple-system, sans-serif",

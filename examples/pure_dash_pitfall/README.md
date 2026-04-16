@@ -1,46 +1,53 @@
 # Pure Dash vs Liquid Dash
 
-Two side-by-side demos. Each has a pure-Dash column and a Liquid Dash
-column running the same UI against the same state-mutation helpers.
-Each column has an in-page console that logs every
-`_dash-update-component` fire attributed to its side.
+Nested workspace surface — Folders → Tabs → Panels with 9 action types
+across 3 entity levels — implemented two ways in one Dash app. Each
+column calls the same state-mutation helpers. Only the wiring between
+the UI and those helpers differs.
 
 ```bash
-# Simple flat surface: toggleable/filterable/growable list, 4 actions
-python examples/pure_dash_pitfall/side_by_side.py
-
-# Nested surface: Folders -> Tabs -> Panels, 9 actions across 3 levels
 python examples/pure_dash_pitfall/nested_side_by_side.py
 ```
 
-At the small scale of `side_by_side.py`, pure Dash is fine with the
-canonical guards. Where the choice starts to matter is
-`nested_side_by_side.py`, where 9 action types across unbounded nested
-entities make the pure-Dash callback graph and per-click round-trip
-count grow in ways Liquid Dash doesn't.
+Each column has a **▶ Run test** button that plays the same 9-click
+sequence against its side. Below each timeline, a running summary
+tracks cumulative activity:
 
-## Measured contrast in `nested_side_by_side.py`
+```
+Tests run: N    Round-trips: N    Total: N KB    Total time: N s
+```
 
-Both columns implement the same folder → tab → panel surface. They call
-the same mutation helpers. The difference is the wiring between the UI
-and those helpers.
+## Measured contrast (one test run = 9 clicks)
 
-| | callbacks registered | round-trips per click (typical) |
-|---|---|---|
-| Pure Dash column | 10 (one per action type + renderer) | 8–10 (1 real + render + 6–8 phantom no_update round-trips) |
-| Liquid Dash column | 2 (dispatch + renderer) | 2 |
+| | callback graph | round-trips | bytes | wall time |
+|---|---|---|---|---|
+| Pure Dash column | 10 callbacks | ~88 | ~108 KB | ~5.9 s |
+| Liquid Dash column | 2 callbacks + 9 reducers | ~18 | ~18 KB | ~5.6 s |
 
-The pure-Dash number grows as you add action types. Every
-pattern-matching ALL callback fires on every layout change whose
-matched set changes, even when the user's click was for an unrelated
-action. Canonical guards keep them correct (they return `no_update`),
-but the round-trips happen and scale with the number of pattern
-callbacks.
+Both columns take about the same wall-clock time (debounce-dominated),
+but Pure Dash sends ~6× the round-trips and ~6× the bytes. The gap
+widens per extra test run because payloads carry bigger state.
 
-Liquid Dash stays at 2 callbacks regardless of action types or entity
-counts, and per-click round-trips stay at 2.
+### What "2 callbacks + 9 reducers" means
 
-## The three patterns that create the gap
+Both sides have the same number of *actions* (9). The difference is
+whether those actions are first-class Dash callbacks.
+
+- **Pure Dash:** one Dash callback per action type (9) + renderer (1) =
+  **10 in the callback graph**. Every entry is a pattern-matching
+  subscriber. Adding a new action adds a new pattern callback.
+- **Liquid Dash:** one Dash callback for dispatch (1) + renderer (1) =
+  **2 in the callback graph**. Per-action logic lives as 9 reducers
+  registered on the dispatch callback's action registry
+  (`@events.on("action")`). Adding a new action is a new reducer — not
+  a new Dash callback, not a new pattern-matching subscriber, no new
+  phantom-fire surface.
+
+The callback *graph* is what carries cost. Reducers are Python dict
+lookups at dispatch time — they don't phantom-fire, don't subscribe
+to layout, don't compete for `allow_duplicate` writes.
+
+## Why the gap exists
 
 ### 1. Pattern-matching Inputs subscribe to layout
 
@@ -50,7 +57,7 @@ every `folder.add`, `tab.add`, `panel.delete`, etc. reshapes several
 pattern sets at once. Even with the canonical guard
 (`if not ctx.triggered_id or ctx.triggered[0]["value"] is None: return
 no_update`), the server still does the round-trip to return
-`no_update`.
+`no_update` — and ships the full State store with it.
 
 ### 2. Payload threads awkwardly through pattern IDs
 
@@ -67,13 +74,6 @@ Every pure-Dash action callback writes to `canvas.data` with
 invariant you want to maintain (e.g. undo, optimistic updates) has to
 account for all ten writers. Liquid Dash has one writer — the
 dispatch callback — so invariants live in one place.
-
-## Why the small demo (`side_by_side.py`) doesn't show this
-
-At 4 actions on a flat list, pure Dash with canonical guards is fine.
-Both columns fire 2–4 round-trips per click, both stay consistent, and
-the 3-callback overhead isn't visible. The contrast only opens up when
-action types multiply and entities nest — hence the second demo.
 
 ## What Liquid Dash trades away
 

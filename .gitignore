@@ -210,3 +210,5 @@ __marimo__/
 .DS_Store
 
 .playwright-mcp/
+# Transient Playwright screenshots dropped at the repo root during testing.
+/*.png
