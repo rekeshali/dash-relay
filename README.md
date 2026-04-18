@@ -3,7 +3,18 @@
 A tiny layer for building **dynamic Dash interfaces** without wiring a
 callback per interactive element.
 
-![Dash Relay demo](examples/workspace_demo/dash-relay-demo.gif)
+![Head-to-head demo](examples/pattern_matching_vs_event_bridge/comparison-demo.gif)
+
+*One nested workspace surface (Folders → Tabs → Panels, 9 actions)
+built two ways in the same Dash app. Each column runs the same scripted
+9-click sequence; the compare panel in the top-right aggregates:*
+
+- ***Round-trips*** — `_dash-update-component` fetches fired · **~80% fewer** on the bridge side
+- ***Data sent*** — total bytes over the wire · **~83% less** on the bridge side
+- ***Wall time*** — click → last server response · **~40% less** on the bridge side
+
+*Left column: pattern-matching callbacks with the canonical guard.
+Right column: the Dash Relay event bridge. Measured on an M1 Pro.*
 
 ## Why it exists
 
