@@ -157,6 +157,11 @@ common case or `state=["a", "b", ...]` for apps that update multiple
 stores from one bridge. Attach per-action logic with
 `@events.handler("action")` (below).
 
+With `state=[...]`, handlers receive a tuple of states —
+`(states, payload, event)` — and either mutate in place (return `None`)
+or return an explicit tuple of new values. See
+`examples/workspace_demo/app.py` for a full worked example.
+
 **Escape hatch.** For apps that don't fit the registry shape at all,
 skip `registry()` and write a normal `@app.callback(Input("bridge",
 "data"), ...)` yourself.
