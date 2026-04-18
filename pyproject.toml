@@ -16,11 +16,24 @@ dependencies = [
 ]
 keywords = ["dash", "plotly", "ui", "event-bridge", "handler-registry", "dynamic-layout"]
 classifiers = [
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
+  "Development Status :: 5 - Production/Stable",
+  "Framework :: Dash",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rekeshali/dash-relay"
+Repository = "https://github.com/rekeshali/dash-relay"
+Issues = "https://github.com/rekeshali/dash-relay/issues"
+Changelog = "https://github.com/rekeshali/dash-relay/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
