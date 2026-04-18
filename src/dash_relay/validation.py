@@ -47,14 +47,14 @@ def _iter_children(children: Any):
 
 
 def validate(layout, *, strict: bool = False) -> ValidationReport:
-    """Walk a Dash layout for common Liquid Dash mistakes.
+    """Walk a Dash layout for common Dash Relay mistakes.
 
     Reports:
       - duplicate-id: two components share an id
-      - empty-action: an element has data-ld-action set to empty string
+      - empty-action: an element has data-relay-action set to empty string
       - missing-bridge: an element targets a bridge id that is not present
         as a dcc.Store in the layout
-      - empty-event: an element has data-ld-event set to empty string
+      - empty-event: an element has data-relay-event set to empty string
 
     If `strict=True`, raises UnsafeLayoutError when any issue is found.
     """
@@ -86,31 +86,31 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
         if _component_name(component) == "Store" and isinstance(cid, str):
             store_ids.add(cid)
 
-        scope = props.get("data-ld-default-bridge")
+        scope = props.get("data-relay-default-bridge")
         if scope:
             scopes.add(scope)
 
-        action = props.get("data-ld-action")
+        action = props.get("data-relay-action")
         if action is not None:
             if not str(action).strip():
                 report.issues.append(
                     ValidationIssue(
                         level="warning",
                         code="empty-action",
-                        message="Element has empty data-ld-action.",
+                        message="Element has empty data-relay-action.",
                         component_id=cid,
                     )
                 )
-            own_bridge = props.get("data-ld-bridge") or ""
+            own_bridge = props.get("data-relay-bridge") or ""
             action_targets.append((own_bridge, cid))
 
-            ev = props.get("data-ld-event")
+            ev = props.get("data-relay-event")
             if ev is not None and not str(ev).strip():
                 report.issues.append(
                     ValidationIssue(
                         level="warning",
                         code="empty-event",
-                        message="Element has empty data-ld-event.",
+                        message="Element has empty data-relay-event.",
                         component_id=cid,
                     )
                 )

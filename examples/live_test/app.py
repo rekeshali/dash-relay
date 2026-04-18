@@ -12,7 +12,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import liquid_dash as ld
+import dash_relay as relay
 
 
 BADGE_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#f59e0b", "#059669"]
@@ -152,25 +152,25 @@ def find_panel(state: dict, panel_id: str | None) -> dict | None:
 
 ASSETS = Path(__file__).with_name("assets")
 app = Dash(__name__, assets_folder=str(ASSETS))
-ld.melt(app)
+relay.install(app)
 
-events = ld.handler(app, state="app-state")
+events = relay.registry(app, state="app-state")
 
 
-@events.on("panel.add")
+@events.handle("panel.add")
 def _(state, payload, event):
     kind = (payload or {}).get("kind", "timeseries")
     state["panels"].append(make_panel_state(state["next_index"], kind))
     state["next_index"] += 1
 
 
-@events.on("panel.delete")
+@events.handle("panel.delete")
 def _(state, payload, event):
     tid = event.get("target")
     state["panels"] = [p for p in state["panels"] if p["id"] != tid]
 
 
-@events.on("panel.duplicate")
+@events.handle("panel.duplicate")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is None:
@@ -183,49 +183,49 @@ def _(state, payload, event):
     state["panels"].append(clone)
 
 
-@events.on("panel.drawer.toggle")
+@events.handle("panel.drawer.toggle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         panel["expanded"] = not bool(panel.get("expanded"))
 
 
-@events.on("panel.lock.toggle")
+@events.handle("panel.lock.toggle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         panel["locked"] = not bool(panel.get("locked"))
 
 
-@events.on("panel.kind.set")
+@events.handle("panel.kind.set")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         set_kind(panel, cycle_kind(panel["kind"], (payload or {}).get("kind")))
 
 
-@events.on("panel.badge.add")
+@events.handle("panel.badge.add")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         add_badge(panel)
 
 
-@events.on("panel.badge.cycle")
+@events.handle("panel.badge.cycle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         cycle_badge(panel)
 
 
-@events.on("panel.badge.remove")
+@events.handle("panel.badge.remove")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None and panel["badges"]:
         panel["badges"].pop()
 
 
-@events.on("panel.setting")
+@events.handle("panel.setting")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None and payload:
@@ -314,7 +314,7 @@ def settings_controls(panel: dict):
             html.Div("Retype panel", className="panel-section-title"),
             html.Div(
                 [
-                    ld.on(
+                    relay.emitter(
                         html.Button(
                             KIND_SPECS[k]["label"],
                             className=("mini-btn is-active" if kind == k else "mini-btn"),
@@ -330,10 +330,10 @@ def settings_controls(panel: dict):
     )
 
     # One emitter per action, reused across buttons that share the same target.
-    badge_add = ld.on("panel.badge.add", target=pid)
-    badge_cycle = ld.on("panel.badge.cycle", target=pid)
-    badge_remove = ld.on("panel.badge.remove", target=pid)
-    setting = ld.on("panel.setting", target=pid)
+    badge_add = relay.emitter("panel.badge.add", target=pid)
+    badge_cycle = relay.emitter("panel.badge.cycle", target=pid)
+    badge_remove = relay.emitter("panel.badge.remove", target=pid)
+    setting = relay.emitter("panel.setting", target=pid)
 
     badges = html.Div(
         [
@@ -424,23 +424,23 @@ def render_panel(panel: dict):
 
     header_actions = html.Div(
         [
-            ld.on(
+            relay.emitter(
                 html.Button(
                     "Settings",
                     className=("panel-icon-btn is-active" if panel["expanded"] else "panel-icon-btn"),
                 ),
                 "panel.drawer.toggle", target=pid,
             ),
-            ld.on(
+            relay.emitter(
                 html.Button(
                     "Lock" if not locked else "Unlock",
                     className=("panel-icon-btn is-active" if locked else "panel-icon-btn"),
                 ),
                 "panel.lock.toggle", target=pid,
             ),
-            ld.on(html.Button("Duplicate", className="panel-icon-btn"),
+            relay.emitter(html.Button("Duplicate", className="panel-icon-btn"),
                   "panel.duplicate", target=pid),
-            ld.on(html.Button("Delete", className="panel-icon-btn danger"),
+            relay.emitter(html.Button("Delete", className="panel-icon-btn danger"),
                   "panel.delete", target=pid),
         ],
         className="panel-header-actions",
@@ -487,12 +487,12 @@ app.layout = html.Div(
     className="demo-shell",
     children=[
         dcc.Store(id="app-state", data=default_state()),
-        ld.bridge(),
+        relay.bridge(),
         html.Div(
             [
                 html.Div(
                     [
-                        html.H1("Liquid Dash panel playground"),
+                        html.H1("Dash Relay panel playground"),
                         html.P(
                             "Add panel types, tweak settings, duplicate, retype, badge, and delete. "
                             "The panel surface is rebuilt from state each time."
@@ -501,11 +501,11 @@ app.layout = html.Div(
                 ),
                 html.Div(
                     [
-                        ld.on(html.Button("Add Time Series", className="add-panel-btn"),
+                        relay.emitter(html.Button("Add Time Series", className="add-panel-btn"),
                               "panel.add", payload={"kind": "timeseries"}),
-                        ld.on(html.Button("Add Histogram", className="add-panel-btn"),
+                        relay.emitter(html.Button("Add Histogram", className="add-panel-btn"),
                               "panel.add", payload={"kind": "histogram"}),
-                        ld.on(html.Button("Add Scatter", className="add-panel-btn"),
+                        relay.emitter(html.Button("Add Scatter", className="add-panel-btn"),
                               "panel.add", payload={"kind": "scatter"}),
                     ],
                     className="toolbar-row",

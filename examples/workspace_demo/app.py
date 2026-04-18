@@ -13,7 +13,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import liquid_dash as ld
+import dash_relay as relay
 
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -54,7 +54,7 @@ KIND_META = {
 # --- Internal helper: convenience wrapper for action buttons ---------------
 
 def _btn(label, action, *, target=None, payload=None, className=None, style=None, title=None):
-    """Wrap an html.Button with ld.on() and default the bridge to UI_EVENT_BRIDGE."""
+    """Wrap an html.Button with relay.emitter() and default the bridge to UI_EVENT_BRIDGE."""
     kwargs: dict[str, Any] = {}
     if className is not None:
         kwargs["className"] = className
@@ -62,7 +62,7 @@ def _btn(label, action, *, target=None, payload=None, className=None, style=None
         kwargs["style"] = style
     if title is not None:
         kwargs["title"] = title
-    return ld.on(html.Button(label, **kwargs), action, target=target, payload=payload, to=UI_EVENT_BRIDGE)
+    return relay.emitter(html.Button(label, **kwargs), action, target=target, payload=payload, to=UI_EVENT_BRIDGE)
 
 
 # --- State factories -------------------------------------------------------
@@ -290,7 +290,7 @@ def active_ids_text(state: dict[str, Any]) -> str:
 # one of the state variables (e.g. wholesale replacing editor).
 #
 # Every handler is registered in `_ACTIONS` at import time so it can be
-# dispatched both by the ld.handler() callback in `build_app()` and by the
+# dispatched both by the relay.registry() callback in `build_app()` and by the
 # pure-function `reduce_ui_event()` wrapper used in tests.
 
 _ACTIONS: dict[str, Callable] = {}
@@ -509,7 +509,7 @@ def _(states, payload, event):
 #
 # Tests call `demo.reduce_ui_event(canvas, editor, event)` directly without
 # constructing a Dash app. This wrapper preserves that interface by going
-# through the same `_ACTIONS` table the ld.handler() registry uses.
+# through the same `_ACTIONS` table the relay.registry() dispatcher uses.
 
 
 def reduce_ui_event(
@@ -948,7 +948,7 @@ def build_render_summary(state: dict[str, Any] | None) -> tuple[str, str]:
 
 def build_app() -> Dash:
     app = Dash(__name__, assets_folder=str(ASSETS_DIR))
-    ld.melt(app)
+    relay.install(app)
 
     toolbar = html.Div(
         [
@@ -968,14 +968,14 @@ def build_app() -> Dash:
         id="proof-shell",
         className="proof-shell",
         children=[
-            ld.bridge(id=UI_EVENT_BRIDGE),
+            relay.bridge(id=UI_EVENT_BRIDGE),
             dcc.Store(id=CANVAS_STORE, data=default_canvas_state()),
             dcc.Store(id=EDITOR_STORE, data=default_editor_state()),
             html.Div(
                 [
                     html.Div(
                         [
-                            html.Div("Liquid Dash demo", className="proof-kicker"),
+                            html.Div("Dash Relay demo", className="proof-kicker"),
                             html.H1("Folders, tabs, and panels with a fixed callback graph",
                                     className="proof-title"),
                             html.P(
@@ -1188,13 +1188,13 @@ def build_app() -> Dash:
     )
 
     # Callback 1: UI events → (canvas, editor)
-    # ld.handler() registers one internal callback that reads the bridge,
+    # relay.registry() registers one internal callback that reads the bridge,
     # dispatches to the matching handler in _ACTIONS, and writes both
     # state stores. The handlers below re-use the module-level _ACTIONS
     # table so `reduce_ui_event` and this runtime path stay in sync.
-    events = ld.handler(app, state=[CANVAS_STORE, EDITOR_STORE], bridge=UI_EVENT_BRIDGE)
+    events = relay.registry(app, state=[CANVAS_STORE, EDITOR_STORE], bridge=UI_EVENT_BRIDGE)
     for _name, _fn in _ACTIONS.items():
-        events.on(_name)(_fn)
+        events.handle(_name)(_fn)
 
     # Callback 2: render workspace chrome
     @app.callback(

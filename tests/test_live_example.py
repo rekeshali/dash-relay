@@ -8,7 +8,7 @@ EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples" / "live_test" / 
 
 
 def _load_example_module():
-    spec = spec_from_file_location("liquid_dash_live_example", EXAMPLE_PATH)
+    spec = spec_from_file_location("dash_relay_live_example", EXAMPLE_PATH)
     module = module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)

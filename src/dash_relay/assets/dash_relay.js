@@ -1,8 +1,8 @@
 (function () {
-  if (window.__liquidDashInstalled) {
+  if (window.__dashRelayInstalled) {
     return;
   }
-  window.__liquidDashInstalled = true;
+  window.__dashRelayInstalled = true;
 
   var registered = new Set();
 
@@ -12,10 +12,10 @@
 
   function getBridge(node) {
     if (!node) return null;
-    var own = node.getAttribute("data-ld-bridge");
+    var own = node.getAttribute("data-relay-bridge");
     if (own) return own;
-    var scope = node.closest ? node.closest("[data-ld-default-bridge]") : null;
-    return scope ? scope.getAttribute("data-ld-default-bridge") : null;
+    var scope = node.closest ? node.closest("[data-relay-default-bridge]") : null;
+    return scope ? scope.getAttribute("data-relay-default-bridge") : null;
   }
 
   function parseJsonAttr(raw, name) {
@@ -23,7 +23,7 @@
     try {
       return JSON.parse(raw);
     } catch (err) {
-      console.warn("liquid_dash: failed to parse " + name, err);
+      console.warn("dash_relay: failed to parse " + name, err);
       return null;
     }
   }
@@ -51,27 +51,27 @@
   function handle(event) {
     if (!isUsableSetProps()) return;
     var start = event.target && event.target.closest
-      ? event.target.closest("[data-ld-action]")
+      ? event.target.closest("[data-relay-action]")
       : null;
     if (!start) return;
-    if (start.dataset.ldEvent !== event.type) return;
+    if (start.dataset.relayEvent !== event.type) return;
     if (start.hasAttribute("disabled") || start.getAttribute("aria-disabled") === "true") return;
 
     var bridge = getBridge(start);
     if (!bridge) {
-      console.warn("liquid_dash: no bridge found for action", start.dataset.ldAction);
+      console.warn("dash_relay: no bridge found for action", start.dataset.relayAction);
       return;
     }
 
-    if (start.dataset.ldPreventDefault === "true" && typeof event.preventDefault === "function") {
+    if (start.dataset.relayPreventDefault === "true" && typeof event.preventDefault === "function") {
       event.preventDefault();
     }
 
     var payload = {
-      action: start.dataset.ldAction,
-      target: parseJsonAttr(start.dataset.ldTarget, "target"),
-      payload: parseJsonAttr(start.dataset.ldPayload, "payload"),
-      source: parseJsonAttr(start.dataset.ldSource, "source"),
+      action: start.dataset.relayAction,
+      target: parseJsonAttr(start.dataset.relayTarget, "target"),
+      payload: parseJsonAttr(start.dataset.relayPayload, "payload"),
+      source: parseJsonAttr(start.dataset.relaySource, "source"),
       bridge: bridge,
       event_type: event.type,
       native: extractEventFields(event),
@@ -90,11 +90,11 @@
   function scan(root) {
     if (!root) return;
     if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
-    if (root.dataset && root.dataset.ldEvent) ensureListener(root.dataset.ldEvent);
+    if (root.dataset && root.dataset.relayEvent) ensureListener(root.dataset.relayEvent);
     if (root.querySelectorAll) {
-      var nodes = root.querySelectorAll("[data-ld-event]");
+      var nodes = root.querySelectorAll("[data-relay-event]");
       for (var i = 0; i < nodes.length; i++) {
-        ensureListener(nodes[i].dataset.ldEvent);
+        ensureListener(nodes[i].dataset.relayEvent);
       }
     }
   }
@@ -118,7 +118,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-ld-event"],
+      attributeFilter: ["data-relay-event"],
     });
   }
 

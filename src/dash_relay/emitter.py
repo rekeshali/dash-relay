@@ -23,31 +23,31 @@ def _wrap(
     prevent_default: bool = False,
 ):
     if not isinstance(action, str) or not action.strip():
-        raise ValueError("on(): action must be a non-empty string")
+        raise ValueError("emitter(): action must be a non-empty string")
     if not isinstance(event, str) or not event.strip():
-        raise ValueError("on(): event must be a non-empty string")
+        raise ValueError("emitter(): event must be a non-empty string")
 
     try:
         payload_json = json.dumps(payload)
         target_json = json.dumps(target)
         source_json = json.dumps(source)
     except TypeError as exc:
-        raise ValueError("on(): payload, target, and source must be JSON serializable") from exc
+        raise ValueError("emitter(): payload, target, and source must be JSON serializable") from exc
 
     attrs = {
-        "data-ld-action": action,
-        "data-ld-event": event,
-        "data-ld-payload": payload_json,
-        "data-ld-bridge": to or "",
-        "data-ld-target": target_json,
-        "data-ld-source": source_json,
-        "data-ld-prevent-default": "true" if prevent_default else "false",
+        "data-relay-action": action,
+        "data-relay-event": event,
+        "data-relay-payload": payload_json,
+        "data-relay-bridge": to or "",
+        "data-relay-target": target_json,
+        "data-relay-source": source_json,
+        "data-relay-prevent-default": "true" if prevent_default else "false",
     }
 
     return html.Div([component], style=_WRAP_STYLE, **attrs)
 
 
-def on(
+def emitter(
     *args,
     payload: Any = None,
     event: str = "click",
@@ -56,20 +56,20 @@ def on(
     source: Any = None,
     prevent_default: bool = False,
 ) -> Any:
-    """Attach a Liquid Dash event to a Dash component.
+    """Wrap a Dash component as a Dash Relay event emitter.
 
     Two forms:
 
-        on(component, action, ...) -> wrapped component
+        emitter(component, action, ...) -> wrapped component
             Wraps `component` so that when the named DOM `event` (default
             "click") fires on it or any descendant, a payload is written to
             the target bridge store.
 
-        on(action, ...) -> callable
-            Returns a reusable emitter `f(component, **extra)` that applies
-            the same action + defaults to any component passed to it. Keyword
-            overrides (e.g. `payload=...`) supplied to `f` override those
-            supplied to `on()`.
+        emitter(action, ...) -> callable
+            Returns a reusable emitter factory `f(component, **extra)` that
+            applies the same action + defaults to any component passed to it.
+            Keyword overrides (e.g. `payload=...`) supplied to `f` override
+            those supplied to `emitter()`.
 
     Any DOM event name works for `event=`. The client-side handler registers
     listeners lazily as new event names appear in the layout.
@@ -95,10 +95,10 @@ def on(
     if len(args) == 2:
         component, action = args
         if not isinstance(action, str):
-            raise TypeError("on(): second argument must be the action name (str)")
+            raise TypeError("emitter(): second argument must be the action name (str)")
         return _wrap(component, action=action, **kw)
 
     raise TypeError(
-        "on() requires either (component, action, ...) or (action, ...) "
-        "to create a reusable emitter."
+        "emitter() requires either (component, action, ...) or (action, ...) "
+        "to create a reusable emitter factory."
     )

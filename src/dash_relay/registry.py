@@ -11,21 +11,21 @@ from .bridge import DEFAULT_BRIDGE_ID
 class Registry:
     """Receiver-side registry of action handlers for a bridge + state(s) pair.
 
-    Create via ``liquid_dash.handler(app, state="store_id")`` for an app with a
-    single state store, or ``liquid_dash.handler(app, state=["a", "b", ...])``
+    Create via ``dash_relay.registry(app, state="store_id")`` for an app with a
+    single state store, or ``dash_relay.registry(app, state=["a", "b", ...])``
     for apps with multiple state stores updated from the same bridge.
 
-    Register handlers with the ``.on(action)`` decorator.
+    Register handlers with the ``.handle(action)`` decorator.
 
     Single-state handler signature::
 
-        @events.on("my.action")
+        @events.handle("my.action")
         def _(state, payload, event) -> new_state | None:
             ...
 
     Multi-state handler signature::
 
-        @events.on("my.action")
+        @events.handle("my.action")
         def _(states, payload, event) -> tuple[new_state, ...] | None:
             a, b = states
             ...
@@ -33,8 +33,8 @@ class Registry:
     In both cases:
 
       * The state passed to the handler is a deep copy, safe to mutate.
-      * ``payload`` is the user-defined payload supplied to ``ld.on(...)``.
-      * ``event`` is the full Liquid Dash event dict with keys:
+      * ``payload`` is the user-defined payload supplied to ``relay.emitter(...)``.
+      * ``event`` is the full Dash Relay event dict with keys:
         ``action``, ``target``, ``source``, ``bridge``, ``event_type``,
         ``native``, ``timestamp``. ``event["native"]`` contains browser-level
         scalar fields (value, checked, key, clientX/Y, etc.).
@@ -56,13 +56,13 @@ class Registry:
         self._multi = isinstance(state_id, list)
         self._state_ids: list[str] = list(state_id) if self._multi else [state_id]
         if not self._state_ids:
-            raise ValueError("handler(): state must be a store id or non-empty list")
+            raise ValueError("registry(): state must be a store id or non-empty list")
         self._handlers: dict[str, Callable] = {}
         self._wire()
 
-    def on(self, action: str) -> Callable[[Callable], Callable]:
+    def handle(self, action: str) -> Callable[[Callable], Callable]:
         if not isinstance(action, str) or not action.strip():
-            raise ValueError("handler.on(): action must be a non-empty string")
+            raise ValueError("registry.handle(): action must be a non-empty string")
 
         def _deco(fn: Callable) -> Callable:
             self._handlers[action] = fn
@@ -120,7 +120,7 @@ class Registry:
                 return self.dispatch(event, state)
 
 
-def handler(
+def registry(
     app,
     state: str | list[str],
     bridge: str = DEFAULT_BRIDGE_ID,
@@ -135,6 +135,6 @@ def handler(
     stores updated together (handlers receive ``(states, payload, event)``
     where ``states`` is a tuple aligned with the id list).
 
-    Register per-action handlers with ``registry.on("action")``.
+    Register per-action handlers with ``registry.handle("action")``.
     """
     return Registry(app, state_id=state, bridge_id=bridge)

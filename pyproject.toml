@@ -3,18 +3,18 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "liquid-dash"
-version = "0.2.3"
-description = "Small helpers for building more dynamic, app-like interfaces in Dash."
+name = "dash-relay"
+version = "0.3.0"
+description = "Client-side event bridge for Dash with a reducer-style handler registry."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-  { name = "Liquid Dash contributors" }
+  { name = "Dash Relay contributors" }
 ]
 dependencies = [
   "dash>=2.16",
 ]
-keywords = ["dash", "plotly", "ui", "delegation", "dynamic-layout"]
+keywords = ["dash", "plotly", "ui", "event-bridge", "reducer", "dynamic-layout"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
@@ -35,7 +35,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-liquid_dash = ["assets/*.js"]
+dash_relay = ["assets/*.js"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
