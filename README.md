@@ -137,7 +137,7 @@ the component.
 |---|---|---|
 | `payload=` | JSON-serializable value passed to the handler | `None` |
 | `event=` | DOM event name | `"click"` |
-| `to=` | target bridge id | `"bridge"` |
+| `bridge=` | target bridge id | `"bridge"` |
 | `target=`, `source=` | context values on the event (any JSON-serializable; types round-trip) | `None` |
 | `prevent_default=` | calls `event.preventDefault()` client-side | `False` |
 

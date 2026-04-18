@@ -34,7 +34,7 @@ def test_emitter_supports_non_html_components_via_wrapper():
 
 
 def test_emitter_curried_form_returns_reusable_emitter():
-    delete = relay.emitter("delete", to="bus")
+    delete = relay.emitter("delete", bridge="bus")
     a = delete(html.Button("x"), payload={"id": 1})
     b = delete(html.Button("y"), payload={"id": 2})
     assert _props(a)["data-relay-bridge"] == "bus"
