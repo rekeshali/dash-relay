@@ -38,16 +38,19 @@ Five names. That's it.
 ## A complete app
 
 ```python
-from copy import deepcopy
 from dash import Dash, Input, Output, dcc, html
 import dash_relay as relay
 
 app = Dash(__name__)
+
+# Install the client-side runtime and a `<script>` tag into the app's index page.
 relay.install(app)
 
+# Wire one dispatch callback: bridge events in → state updates out.
 events = relay.registry(app, state="state")
 
 
+# Per-action handlers. Each receives a deepcopy of state, safe to mutate.
 @events.handle("add")
 def _(state, payload, event):
     state["items"].append({"id": len(state["items"]) + 1, "text": state["draft"]})
@@ -64,6 +67,7 @@ def _(state, payload, event):
     state["draft"] = event["native"].get("value", "")
 
 
+# Layout: one state store, one bridge, wrapped interactive elements.
 app.layout = html.Div([
     dcc.Store(id="state", data={"draft": "", "items": []}),
     relay.bridge(),
@@ -73,6 +77,7 @@ app.layout = html.Div([
 ])
 
 
+# Standard Dash renderer: state changes → HTML. Relay stays out of this path.
 @app.callback(Output("list", "children"), Input("state", "data"))
 def render(s):
     return [
