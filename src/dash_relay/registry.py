@@ -70,6 +70,14 @@ class Registry:
 
         return _deco
 
+    def actions(self) -> frozenset[str]:
+        """Return the set of action names this registry has handlers for.
+
+        Used by ``relay.validate(layout, registry=...)`` to detect
+        emitter-to-handler mismatches at load time.
+        """
+        return frozenset(self._handlers)
+
     def dispatch(self, event: dict | None, *states: Any) -> Any:
         if not event or "action" not in event:
             return no_update

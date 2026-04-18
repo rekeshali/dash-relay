@@ -179,7 +179,7 @@ the store with that value.
 fields extracted from the original DOM event — `value`, `checked`,
 `key`, `clientX/Y`, `deltaX/Y`, etc.
 
-### `relay.validate(layout)`
+### `relay.validate(layout, registry=None)`
 
 Optional development-time linter. Walks the layout and reports:
 
@@ -187,6 +187,22 @@ Optional development-time linter. Walks the layout and reports:
 - **empty actions** — an emitter with an empty action string
 - **missing bridge** — an emitter targeting a bridge id that isn't
   present as a `dcc.Store` in the layout
+
+Pass `registry=events` to also cross-check action strings against
+registered handlers:
+
+- **orphan-emitter** — an emitter's action has no matching handler
+  (clicking that element is a no-op)
+- **orphan-handler** — a handler is registered for an action that no
+  emitter in the layout uses (false-positive-prone if emitters are
+  rendered dynamically from callbacks)
+
+```python
+report = relay.validate(app.layout, registry=events)
+if not report.ok:
+    for issue in report.issues:
+        print(f"[{issue.code}] {issue.message}")
+```
 
 ## Installation
 

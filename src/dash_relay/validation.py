@@ -46,7 +46,7 @@ def _iter_children(children: Any):
     yield children
 
 
-def validate(layout, *, strict: bool = False) -> ValidationReport:
+def validate(layout, *, strict: bool = False, registry: Any = None) -> ValidationReport:
     """Walk a Dash layout for common Dash Relay mistakes.
 
     Reports:
@@ -55,6 +55,17 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
       - missing-bridge: an element targets a bridge id that is not present
         as a dcc.Store in the layout
       - empty-event: an element has data-relay-event set to empty string
+      - orphan-emitter: an emitter's action has no matching handler on the
+        supplied registry (a user click that lands nowhere).
+        Only reported when ``registry=`` is provided.
+      - orphan-handler: a registered handler has no emitter in the layout
+        using its action name. Only reported when ``registry=`` is provided.
+        Note: this may be a false positive for apps that render emitters
+        dynamically inside callbacks — the initial layout won't contain them.
+
+    Pass ``registry=events`` (the ``Registry`` returned by
+    ``relay.registry(app, state=...)``) to enable the orphan checks. The
+    registry only needs to expose ``.actions() -> Iterable[str]``.
 
     If `strict=True`, raises UnsafeLayoutError when any issue is found.
     """
@@ -63,6 +74,7 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
     store_ids: set[str] = set()
     scopes: set[str] = set()
     action_targets: list[tuple[str, str | None]] = []  # (bridge_or_scope, component_id)
+    emitter_actions: set[str] = set()
 
     def walk(component: Any):
         if component is None or isinstance(component, (str, int, float, bool)):
@@ -92,7 +104,8 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
 
         action = props.get("data-relay-action")
         if action is not None:
-            if not str(action).strip():
+            action_str = str(action)
+            if not action_str.strip():
                 report.issues.append(
                     ValidationIssue(
                         level="warning",
@@ -101,6 +114,8 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
                         component_id=cid,
                     )
                 )
+            else:
+                emitter_actions.add(action_str)
             own_bridge = props.get("data-relay-bridge") or ""
             action_targets.append((own_bridge, cid))
 
@@ -143,6 +158,43 @@ def validate(layout, *, strict: bool = False) -> ValidationReport:
                     code="missing-bridge",
                     message="Action has no bridge and no bridge is present in the layout.",
                     component_id=cid,
+                )
+            )
+
+    # Cross-check emitter actions against the registry's handlers, if one
+    # was supplied. Action names are string-linked between emitter and
+    # handler; this catches typos on either side at load time.
+    if registry is not None:
+        try:
+            handler_actions = frozenset(registry.actions())
+        except AttributeError as exc:
+            raise TypeError(
+                "validate(registry=...) requires an object with an "
+                ".actions() method returning the registered action names."
+            ) from exc
+        orphan_emitters = emitter_actions - handler_actions
+        orphan_handlers = handler_actions - emitter_actions
+        for action in sorted(orphan_emitters):
+            report.issues.append(
+                ValidationIssue(
+                    level="warning",
+                    code="orphan-emitter",
+                    message=(
+                        f"Emitter action '{action}' has no matching handler "
+                        "on the registry — clicking this element is a no-op."
+                    ),
+                )
+            )
+        for action in sorted(orphan_handlers):
+            report.issues.append(
+                ValidationIssue(
+                    level="warning",
+                    code="orphan-handler",
+                    message=(
+                        f"Handler registered for '{action}' but no emitter "
+                        "in the layout uses this action. (If emitters are "
+                        "rendered dynamically from callbacks, this is expected.)"
+                    ),
                 )
             )
 

@@ -172,9 +172,28 @@ above applies.
 
 Dash Relay adds a client-side script (~120 lines) and one wrapper
 `html.Div` per interactive element. Events flow through `dcc.Store`
-rather than the standard Dash callback graph, so tools that introspect
-that graph (e.g. the dev panel's callback view) show only the single
-dispatch callback, not per-action handlers.
+rather than the standard Dash callback graph. Concretely, the
+tradeoffs are:
+
+- **Extra DOM nodes.** Every `relay.emitter(...)` wraps its component
+  in a `display: contents` div. Visually invisible, and layout is
+  unchanged, but the extra node is there. CSS selectors or
+  third-party JS that walk DOM siblings may need to account for it.
+- **Action names are magic strings.** `relay.emitter(btn, "panel.add")`
+  and `@events.handler("panel.add")` are linked by string identity,
+  with no "find references" path through the IDE. `relay.validate(
+  app.layout, registry=events)` catches mismatches (orphan emitters,
+  orphan handlers) at load time — but it has to be called. Pure-Dash's
+  Python-symbol linkage is enforced without any tooling step.
+- **Stack traces go through the registry.** A `ZeroDivisionError` in a
+  handler shows `Registry.dispatch → handler` frames before landing
+  in your code. Pure-Dash tracebacks land directly on the failing
+  callback. Small ergonomics tax when debugging.
+- **The Dash dev panel callback view is less useful.** The graph
+  visualizer shows one dispatch callback, not 9 per-action handlers,
+  because handlers aren't Dash primitives. If you rely on the dev
+  panel's callback graph heavily, you'll need to read the handler
+  registry separately.
 
 For a static layout with a fixed number of interactions, pattern
 matching is lighter-weight. The event bridge earns its keep when the
