@@ -17,7 +17,7 @@ def test_registry_dispatches_registered_action():
     app = _make_app()
     events = relay.registry(app, state="state")
 
-    @events.handle("bump")
+    @events.handler("bump")
     def _(state, payload, event):
         state["count"] += int((payload or {}).get("by", 1))
 
@@ -33,7 +33,7 @@ def test_registry_ignores_unknown_action():
     app = _make_app()
     events = relay.registry(app, state="state")
 
-    @events.handle("known")
+    @events.handler("known")
     def _(state, payload, event):
         state["count"] = 1
 
@@ -46,7 +46,7 @@ def test_registry_passes_full_event_to_handler():
     events = relay.registry(app, state="state")
     seen = {}
 
-    @events.handle("touch")
+    @events.handler("touch")
     def _(state, payload, event):
         seen["target"] = event.get("target")
         seen["native"] = event.get("native")
@@ -80,7 +80,7 @@ def test_registry_multi_state_dispatches_and_returns_tuple():
     app = _make_multi_state_app()
     events = relay.registry(app, state=["a", "b"])
 
-    @events.handle("bump-a")
+    @events.handler("bump-a")
     def _(states, payload, event):
         a, b = states
         a["count"] += 1
@@ -94,7 +94,7 @@ def test_registry_multi_state_supports_explicit_tuple_return():
     app = _make_multi_state_app()
     events = relay.registry(app, state=["a", "b"])
 
-    @events.handle("swap")
+    @events.handler("swap")
     def _(states, payload, event):
         a, b = states
         return b, a

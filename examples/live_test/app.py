@@ -157,20 +157,20 @@ relay.install(app)
 events = relay.registry(app, state="app-state")
 
 
-@events.handle("panel.add")
+@events.handler("panel.add")
 def _(state, payload, event):
     kind = (payload or {}).get("kind", "timeseries")
     state["panels"].append(make_panel_state(state["next_index"], kind))
     state["next_index"] += 1
 
 
-@events.handle("panel.delete")
+@events.handler("panel.delete")
 def _(state, payload, event):
     tid = event.get("target")
     state["panels"] = [p for p in state["panels"] if p["id"] != tid]
 
 
-@events.handle("panel.duplicate")
+@events.handler("panel.duplicate")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is None:
@@ -183,49 +183,49 @@ def _(state, payload, event):
     state["panels"].append(clone)
 
 
-@events.handle("panel.drawer.toggle")
+@events.handler("panel.drawer.toggle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         panel["expanded"] = not bool(panel.get("expanded"))
 
 
-@events.handle("panel.lock.toggle")
+@events.handler("panel.lock.toggle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         panel["locked"] = not bool(panel.get("locked"))
 
 
-@events.handle("panel.kind.set")
+@events.handler("panel.kind.set")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         set_kind(panel, cycle_kind(panel["kind"], (payload or {}).get("kind")))
 
 
-@events.handle("panel.badge.add")
+@events.handler("panel.badge.add")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         add_badge(panel)
 
 
-@events.handle("panel.badge.cycle")
+@events.handler("panel.badge.cycle")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None:
         cycle_badge(panel)
 
 
-@events.handle("panel.badge.remove")
+@events.handler("panel.badge.remove")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None and panel["badges"]:
         panel["badges"].pop()
 
 
-@events.handle("panel.setting")
+@events.handler("panel.setting")
 def _(state, payload, event):
     panel = find_panel(state, event.get("target"))
     if panel is not None and payload:

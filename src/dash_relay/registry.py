@@ -15,17 +15,17 @@ class Registry:
     single state store, or ``dash_relay.registry(app, state=["a", "b", ...])``
     for apps with multiple state stores updated from the same bridge.
 
-    Register handlers with the ``.handle(action)`` decorator.
+    Register handlers with the ``.handler(action)`` decorator.
 
     Single-state handler signature::
 
-        @events.handle("my.action")
+        @events.handler("my.action")
         def _(state, payload, event) -> new_state | None:
             ...
 
     Multi-state handler signature::
 
-        @events.handle("my.action")
+        @events.handler("my.action")
         def _(states, payload, event) -> tuple[new_state, ...] | None:
             a, b = states
             ...
@@ -60,9 +60,9 @@ class Registry:
         self._handlers: dict[str, Callable] = {}
         self._wire()
 
-    def handle(self, action: str) -> Callable[[Callable], Callable]:
+    def handler(self, action: str) -> Callable[[Callable], Callable]:
         if not isinstance(action, str) or not action.strip():
-            raise ValueError("registry.handle(): action must be a non-empty string")
+            raise ValueError("registry.handler(): action must be a non-empty string")
 
         def _deco(fn: Callable) -> Callable:
             self._handlers[action] = fn
@@ -135,6 +135,6 @@ def registry(
     stores updated together (handlers receive ``(states, payload, event)``
     where ``states`` is a tuple aligned with the id list).
 
-    Register per-action handlers with ``registry.handle("action")``.
+    Register per-action handlers with ``registry.handler("action")``.
     """
     return Registry(app, state_id=state, bridge_id=bridge)

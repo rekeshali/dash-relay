@@ -961,47 +961,47 @@ def pd_panel_duplicate(_clicks, s):
 events = relay.registry(app, state="relay-state", bridge="relay-bridge")
 
 
-@events.handle("folder.add")
+@events.handler("folder.add")
 def _(s, payload, event):
     do_folder_add(s)
 
 
-@events.handle("folder.activate")
+@events.handler("folder.activate")
 def _(s, payload, event):
     do_folder_activate(s, event["target"])
 
 
-@events.handle("folder.delete")
+@events.handler("folder.delete")
 def _(s, payload, event):
     do_folder_delete(s, event["target"])
 
 
-@events.handle("tab.add")
+@events.handler("tab.add")
 def _(s, payload, event):
     do_tab_add(s)
 
 
-@events.handle("tab.activate")
+@events.handler("tab.activate")
 def _(s, payload, event):
     do_tab_activate(s, event["target"])
 
 
-@events.handle("tab.delete")
+@events.handler("tab.delete")
 def _(s, payload, event):
     do_tab_delete(s, event["target"])
 
 
-@events.handle("panel.add")
+@events.handler("panel.add")
 def _(s, payload, event):
     do_panel_add(s, (payload or {}).get("kind", "timeseries"))
 
 
-@events.handle("panel.delete")
+@events.handler("panel.delete")
 def _(s, payload, event):
     do_panel_delete(s, event["target"])
 
 
-@events.handle("panel.duplicate")
+@events.handler("panel.duplicate")
 def _(s, payload, event):
     do_panel_duplicate(s, event["target"])
 
@@ -1077,7 +1077,7 @@ def _count_source_lines(begin_marker, end_marker):
 
 _PD_CB_COUNT = _count_callbacks("pd-")
 _RELAY_CB_COUNT = _count_callbacks("relay-")
-# Dash Relay also has per-action handlers registered via @events.handle(...).
+# Dash Relay also has per-action handlers registered via @events.handler(...).
 # They're not in the Dash callback graph (one Dash dispatch callback routes
 # to all of them by action name), so they don't inflate phantom-fire cost
 # the way pattern-matching callbacks do. But they're still code we wrote.

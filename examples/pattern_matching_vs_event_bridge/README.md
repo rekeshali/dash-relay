@@ -56,7 +56,7 @@ whether those actions are first-class Dash callbacks.
 - **Event-bridge column:** one Dash callback for dispatch
   (1) + renderer (1) = **2 in the callback graph**. Per-action logic
   lives as 9 handlers registered on the dispatch callback's action
-  registry (`@events.handle("action")`). Adding a new action is a
+  registry (`@events.handler("action")`). Adding a new action is a
   new handler — not a new Dash callback, not a new pattern-matching
   subscriber, no new phantom-fire surface.
 
@@ -138,7 +138,7 @@ invariants live in one place.
     - Re-checking phantom-fire behavior every time a new pattern
       callback is added.
 
-Event-bridge handlers are just `@events.handle("name") def _(s,
+Event-bridge handlers are just `@events.handler("name") def _(s,
 payload, event): ...` with no defensive boilerplate. None of the
 above applies.
 

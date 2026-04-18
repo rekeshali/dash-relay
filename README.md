@@ -51,18 +51,18 @@ events = relay.registry(app, state="state")
 
 
 # Per-action handlers. Each receives a deepcopy of state, safe to mutate.
-@events.handle("add")
+@events.handler("add")
 def _(state, payload, event):
     state["items"].append({"id": len(state["items"]) + 1, "text": state["draft"]})
     state["draft"] = ""
 
 
-@events.handle("delete")
+@events.handler("delete")
 def _(state, payload, event):
     state["items"] = [t for t in state["items"] if t["id"] != event["target"]]
 
 
-@events.handle("draft")
+@events.handler("draft")
 def _(state, payload, event):
     state["draft"] = event["native"].get("value", "")
 
@@ -131,7 +131,7 @@ delete = relay.emitter("delete")
 
 **`relay.registry(app, state="store_id")`** — registers one internal
 Dash callback wired from the bridge to the state store. Register
-per-action handlers with `@events.handle("action")`. Handlers have
+per-action handlers with `@events.handler("action")`. Handlers have
 signature `(state, payload, event) -> new_state | None`:
 
 - `state` — a deep copy of the state store (safe to mutate)

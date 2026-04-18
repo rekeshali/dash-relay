@@ -1194,7 +1194,7 @@ def build_app() -> Dash:
     # table so `reduce_ui_event` and this runtime path stay in sync.
     events = relay.registry(app, state=[CANVAS_STORE, EDITOR_STORE], bridge=UI_EVENT_BRIDGE)
     for _name, _fn in _ACTIONS.items():
-        events.handle(_name)(_fn)
+        events.handler(_name)(_fn)
 
     # Callback 2: render workspace chrome
     @app.callback(
