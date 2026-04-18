@@ -61,6 +61,15 @@ class Registry:
         self._wire()
 
     def handler(self, action: str) -> Callable[[Callable], Callable]:
+        """Register the decorated function as the handler for ``action``.
+
+        The handler receives ``(state, payload, event)`` for a single-state
+        registry or ``(states, payload, event)`` for a multi-state one, and
+        returns either ``None`` (keep the deep-copied state / tuple) or a
+        replacement value. See the class docstring for the full contract.
+
+        Re-registering the same ``action`` replaces the previous handler.
+        """
         if not isinstance(action, str) or not action.strip():
             raise ValueError("registry.handler(): action must be a non-empty string")
 
@@ -79,6 +88,16 @@ class Registry:
         return frozenset(self._handlers)
 
     def dispatch(self, event: dict | None, *states: Any) -> Any:
+        """Run the handler for ``event["action"]`` and return updated state.
+
+        Deep-copies each state before handing it to the handler so handlers
+        can mutate freely. Returns ``dash.no_update`` when ``event`` is
+        empty or carries an unregistered action — the Dash callback
+        forwards that through to leave the store(s) untouched.
+
+        Exposed publicly so tests can bypass the Dash callback and exercise
+        the routing + state-handling path directly.
+        """
         if not event or "action" not in event:
             return no_update
         fn = self._handlers.get(event["action"])

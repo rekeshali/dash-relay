@@ -40,7 +40,21 @@ def _register_asset(app) -> None:
 def install(app, *, register_asset: bool = True):
     """Prepare a Dash app to carry Dash Relay events.
 
-    Installs the client-side event handler and returns the app.
+    Two side effects on ``app``:
+
+      * A Flask route is registered at ``/_dash_relay/dash_relay.js`` that
+        serves the ~130-line client-side runtime (event delegation, lazy
+        listener registration, bridge writes).
+      * A ``<script src="/_dash_relay/dash_relay.js">`` tag is inserted
+        into ``app.index_string`` right after the ``{%scripts%}`` marker
+        so the runtime loads on every page render.
+
+    Both steps are idempotent — calling ``install()`` twice is safe.
+
+    Pass ``register_asset=False`` to skip both steps, e.g. if you prefer
+    to vendor the asset yourself or serve it from a CDN.
+
+    Returns the app for chaining.
     """
     if register_asset:
         _register_asset(app)
