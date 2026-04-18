@@ -727,7 +727,7 @@ _CONSOLE_JS = r"""
     return '<div class="cmp-metric">' +
       '<div class="cmp-label">' + label + '</div>' +
       '<div><span class="cmp-pct ' + cls + '">' + shown + '%</span>' +
-      '<span class="cmp-dir">' + word + ' (LD)</span></div>' +
+      '<span class="cmp-dir">' + word + ' (Relay)</span></div>' +
       '<div class="cmp-value">' + pdFmt + ' → ' + ldFmt + '</div>' +
       '</div>';
   }
