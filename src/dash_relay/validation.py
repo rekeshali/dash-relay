@@ -9,6 +9,19 @@ from .exceptions import UnsafeLayoutError
 
 @dataclass
 class ValidationIssue:
+    """One finding from ``relay.validate()``.
+
+    Fields:
+        level: "warning" today (reserved for future "error" / "info").
+        code: stable short identifier (e.g. "duplicate-id",
+            "orphan-emitter") — safe to match against in tooling.
+        message: human-readable description of the issue.
+        component_id: id of the offending component when known. ``None``
+            for issues that aren't tied to a specific component
+            (e.g. orphan-handler, which points at a registered handler
+            with no corresponding emitter).
+    """
+
     level: str
     code: str
     message: str
@@ -17,6 +30,13 @@ class ValidationIssue:
 
 @dataclass
 class ValidationReport:
+    """Result of a ``relay.validate()`` run.
+
+    ``report.issues`` is the list of findings (empty on a clean layout).
+    ``report.ok`` is a convenience property — ``True`` iff ``issues`` is
+    empty — so the common "fail the build on any issue" path stays terse.
+    """
+
     issues: list[ValidationIssue] = field(default_factory=list)
 
     @property
