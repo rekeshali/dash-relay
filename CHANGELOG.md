@@ -158,7 +158,7 @@ so `validate()` can introspect after install.
 
 ### Migration
 
-Quiver-scale migration is mechanical:
+Migration is mechanical:
 
 1. Delete every `events = relay.registry(...)` construction.
 2. For each `@events.handler("foo")`, rewrite as
