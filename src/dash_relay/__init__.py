@@ -1,38 +1,51 @@
-"""Dash Relay — client-side event bridge for Dash with action-based dispatch.
+"""Dash Relay — client-side event bridge for Dash.
 
-Canonical import:
+Public surface (v4):
 
     import dash_relay as relay
-    from dash_relay import Action
+    from dash_relay import Action, Emitter, DEFAULT_BRIDGE
+    from dash import Output, State
 
-Surface:
+    relay.install(app)                                       # lifecycle entry
+    relay.validate(layout=None, *, strict=False, app=None)   # correctness checks
 
-    relay.install(app)                                        # install runtime + wire dispatchers
-    relay.bridge(id="bridge")                                 # event sink (a dcc.Store)
-    relay.emitter(component, action, ...)                     # wrap a component as an event emitter
-    relay.handle(Output(...), Action("..."), State(...))      # handler decorator
-    relay.validate(layout)                                    # optional linter
+    Emitter(action=..., bridge=..., target=..., ...)         # template
+        .wrap(component, **overrides) -> Component
+        .attrs(**overrides) -> dict[str, str]
 
-Handlers register globally via the ``@relay.handle`` decorator and look
-like Dash callbacks: ``Output``, ``Action`` (substituting for ``Input``),
-and ``State`` declared positionally; the wrapped function receives
-``event`` for the action and current values for each ``State``.
+    @relay.callback(Output(...), Action(...), State(...))    # decorator
+    def handler(event, *state_values): ...
+
+The handler signature mirrors plain Dash callbacks: arguments appear in
+declaration order with ``Output``s skipped (response targets, not
+inputs). Each ``Action`` slot becomes a positional arg receiving the
+event envelope dict; each ``State`` slot becomes a positional arg
+receiving the current store value.
 """
 
-from .action import Action
+from .action import Action, DEFAULT_BRIDGE
 from .app import install
-from .bridge import bridge
-from .emitter import emitter
-from .handle import handle
+from .callback import callback
+from .emitter import Emitter
+from .exceptions import (
+    DashRelayError,
+    InstallError,
+    InvalidEventError,
+    UnsafeLayoutError,
+)
 from .validation import validate, ValidationIssue, ValidationReport
 
 __all__ = [
-    "install",
-    "bridge",
-    "emitter",
-    "handle",
     "Action",
-    "validate",
+    "DEFAULT_BRIDGE",
+    "DashRelayError",
+    "Emitter",
+    "InstallError",
+    "InvalidEventError",
+    "UnsafeLayoutError",
     "ValidationIssue",
     "ValidationReport",
+    "callback",
+    "install",
+    "validate",
 ]

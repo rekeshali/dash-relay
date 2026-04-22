@@ -1,49 +1,32 @@
-"""The ``Action`` dependency primitive.
+"""The ``Action`` dependency primitive and the default bridge constant.
 
 ``Action`` slots into the same position Dash's ``Input`` would in a
-callback's dependency list, but identifies a relay action name rather
-than a component property.
+callback's dependency list. It identifies a relay action name and the
+bridge it travels on. If ``bridge=`` isn't given, the action uses
+``DEFAULT_BRIDGE``.
 
-Usage::
-
-    from dash import Output, State
-    from dash_relay import Action, handle
-
-    @handle(
-        Output("tab_store", "data"),
-        Action("tab.close"),
-        State("tab_store", "data"),
-    )
-    def close_tab(event, tab):
-        ...
-
-The bridge an action travels on is normally determined by the emitter
-(which declares ``bridge=...``); the handler doesn't need to know.
-The optional ``bridge=`` kwarg on ``Action`` is purely a
-deduplication aid for apps where two emit-sites on different bridges
-genuinely use the same action name and want different handlers.
+Multiple ``Action(...)`` declarations in a single ``@relay.callback``
+register the wrapped function as the handler for every listed
+``(bridge, action)`` pair — alias semantics for the common
+"close-or-dismiss" shape.
 """
 from __future__ import annotations
+
+
+DEFAULT_BRIDGE: str = "dash-relay-bridge"
 
 
 class Action:
     """A relay action dependency.
 
-    Wraps an action name string. In v1 only string names are supported;
-    dict-shaped (pattern-matchable) actions are deferred to a future
-    version.
+    Args:
+        name: The action name string. Required, non-empty.
+        bridge: The bridge name to listen on. If ``None`` (the default),
+            falls through to ``DEFAULT_BRIDGE`` at construction.
 
-    The optional ``bridge`` kwarg pins this handler to a specific bridge:
-    the dispatcher will only invoke this handler when the named bridge
-    fires the matching action. With ``bridge=None`` (the default) the
-    handler is a wildcard — invoked whenever any bridge fires the
-    matching action. Pinned handlers shadow wildcards for their specific
-    bridge; for any other bridge, the wildcard handler runs.
-
-    Two handlers can't share the same ``(name, bridge)`` key. Two
-    wildcards (``bridge=None``) for the same name are also a collision.
-    A wildcard plus a per-bridge pin for the same name is fine — the
-    pin shadows the wildcard for its bridge only.
+    The class normalizes ``bridge=None`` to ``DEFAULT_BRIDGE`` immediately,
+    so ``Action("foo").bridge_id`` is always a concrete string. This keeps
+    every (bridge, action) routing key well-defined at registration time.
     """
 
     __slots__ = ("name", "bridge_id")
@@ -63,10 +46,10 @@ class Action:
             if not bridge.strip():
                 raise ValueError("Action(bridge=): must be a non-empty string when provided")
         self.name = name
-        self.bridge_id = bridge
+        self.bridge_id = bridge if bridge is not None else DEFAULT_BRIDGE
 
     def __repr__(self) -> str:
-        if self.bridge_id is None:
+        if self.bridge_id == DEFAULT_BRIDGE:
             return f"Action({self.name!r})"
         return f"Action({self.name!r}, bridge={self.bridge_id!r})"
 

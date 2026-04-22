@@ -1,4 +1,4 @@
-"""Tests for relay.validate() against the 3.0 surface."""
+"""Tests for relay.validate() against the v4 surface."""
 from __future__ import annotations
 
 import pytest
@@ -6,241 +6,122 @@ from dash import Dash, Output, State, dcc, html
 
 import dash_relay as relay
 from dash_relay import Action
-from dash_relay.handle import _PENDING_HANDLERS
-from dash_relay.bridge import _REGISTERED_BRIDGE_IDS
+from dash_relay.callback import _PENDING_CALLBACKS
 
 
 @pytest.fixture(autouse=True)
-def _isolate_pools():
-    _PENDING_HANDLERS.clear()
-    _REGISTERED_BRIDGE_IDS.clear()
+def _isolate_pool():
+    _PENDING_CALLBACKS.clear()
     yield
-    _PENDING_HANDLERS.clear()
-    _REGISTERED_BRIDGE_IDS.clear()
+    _PENDING_CALLBACKS.clear()
 
 
-def test_validate_flags_missing_bridge():
-    layout = html.Div([
-        dcc.Store(id="bridge"),
-        relay.emitter(html.Button("Delete"), "card.delete", bridge="ghost-bus"),
-    ])
-    report = relay.validate(layout)
-    codes = {issue.code for issue in report.issues}
-    assert "missing-bridge" in codes
+# ---------------------------------------------------------------------------
+# Pre-install: pool-based checks
+# ---------------------------------------------------------------------------
 
 
-def test_validate_flags_duplicate_ids():
-    layout = html.Div([dcc.Store(id="dup"), html.Div(id="dup")])
-    report = relay.validate(layout)
-    codes = {issue.code for issue in report.issues}
-    assert "duplicate-id" in codes
+def test_validate_pre_install_clean_when_no_handlers():
+    report = relay.validate()
+    assert report.ok
 
 
-def test_validate_passes_on_clean_layout():
-    layout = html.Div([
-        relay.bridge(),
-        relay.emitter(html.Button("Add"), "add"),
-        relay.emitter(html.Button("Delete"), "delete", target="row-1"),
-    ])
-    report = relay.validate(layout)
-    assert report.ok, f"unexpected issues: {report.issues}"
-
-
-def test_validate_with_app_flags_emitter_with_no_matching_handler():
-    @relay.handle(Output("state", "data"), Action("add"))
+def test_validate_pre_install_flags_duplicate_handler():
+    @relay.callback(Output("a", "data"), Action("close", bridge="x"))
     def _(event): return None
 
-    app = Dash(__name__)
-    app.layout = html.Div([dcc.Store(id="state"), relay.bridge()])
-    relay.install(app)
-
-    layout = html.Div([
-        dcc.Store(id="state"),
-        relay.bridge(),
-        relay.emitter(html.Button("Add"), "addd"),  # typo
-    ])
-    report = relay.validate(layout, app=app)
-    codes = [i.code for i in report.issues]
-    assert "orphan-emitter" in codes
-    assert "addd" in next(i.message for i in report.issues if i.code == "orphan-emitter")
-
-
-def test_validate_with_app_flags_handler_with_no_emitter():
-    @relay.handle(Output("state", "data"), Action("delete"))
+    @relay.callback(Output("a", "data"), Action("close", bridge="x"))
     def _(event): return None
 
-    @relay.handle(Output("state", "data"), Action("add"))
-    def _(event): return None
-
-    app = Dash(__name__)
-    app.layout = html.Div([dcc.Store(id="state"), relay.bridge()])
-    # Note: install() will fail because two handlers can't both write
-    # the same Output without allow_duplicate. Use distinct Outputs.
-
-    _PENDING_HANDLERS.clear()  # reset
-
-    @relay.handle(Output("state", "data"), Action("add"))
-    def _(event): return None
-
-    @relay.handle(Output("other", "data"), Action("delete"))
-    def _(event): return None
-
-    app2 = Dash(__name__)
-    app2.layout = html.Div([
-        dcc.Store(id="state"),
-        dcc.Store(id="other"),
-        relay.bridge(),
-    ])
-    relay.install(app2)
-
-    layout = html.Div([
-        dcc.Store(id="state"),
-        dcc.Store(id="other"),
-        relay.bridge(),
-        relay.emitter(html.Button("Add"), "add"),
-        # No emitter for 'delete' — should be flagged.
-    ])
-    report = relay.validate(layout, app=app2)
-    codes = [i.code for i in report.issues]
-    assert "orphan-handler" in codes
-    assert "delete" in next(i.message for i in report.issues if i.code == "orphan-handler")
-
-
-def test_validate_clean_when_emitters_and_handlers_match():
-    @relay.handle(Output("a", "data"), Action("add"))
-    def _(event): return None
-
-    @relay.handle(Output("b", "data"), Action("delete"))
-    def _(event): return None
-
-    app = Dash(__name__)
-    app.layout = html.Div([
-        dcc.Store(id="a"),
-        dcc.Store(id="b"),
-        relay.bridge(),
-    ])
-    relay.install(app)
-
-    layout = html.Div([
-        dcc.Store(id="a"),
-        dcc.Store(id="b"),
-        relay.bridge(),
-        relay.emitter(html.Button("Add"), "add"),
-        relay.emitter(html.Button("x"), "delete"),
-    ])
-    report = relay.validate(layout, app=app)
-    assert report.ok, f"unexpected issues: {report.issues}"
-
-
-def test_validate_app_param_is_optional():
-    layout = html.Div([
-        dcc.Store(id="state"),
-        relay.bridge(),
-        relay.emitter(html.Button("Add"), "some-unregistered-action"),
-    ])
-    report = relay.validate(layout)  # no app=
+    report = relay.validate()
     codes = {i.code for i in report.issues}
-    assert "orphan-emitter" not in codes
-    assert "orphan-handler" not in codes
+    assert "duplicate-handler" in codes
 
 
-def test_validate_flags_output_id_with_no_store_in_layout():
-    @relay.handle(Output("missing-store", "data"), Action("touch"))
-    def _(event): return None
-
-    app = Dash(__name__)
-    app.layout = html.Div([dcc.Store(id="missing-store"), relay.bridge()])
-    relay.install(app)
-
-    # Validate against a layout that lacks the output store.
-    layout = html.Div([relay.bridge()])
-    report = relay.validate(layout, app=app)
-    codes = {i.code for i in report.issues}
-    assert "output-not-found" in codes
-
-
-def test_validate_flags_state_id_with_no_store_in_layout():
-    @relay.handle(
-        Output("write", "data"),
-        Action("touch"),
-        State("read", "data"),
+def test_validate_aliases_in_one_callback_are_not_duplicates():
+    @relay.callback(
+        Output("a", "data"),
+        Action("close", bridge="x"),
+        Action("dismiss", bridge="x"),
     )
-    def _(event, val): return None
+    def _(event): return None
+
+    report = relay.validate()
+    assert report.ok
+
+
+# ---------------------------------------------------------------------------
+# Post-install: app-aware checks via app._dash_relay_handlers
+# ---------------------------------------------------------------------------
+
+
+def test_validate_post_install_uses_app_handler_set():
+    @relay.callback(Output("a", "data"), Action("close", bridge="x"))
+    def _(event): return None
 
     app = Dash(__name__)
-    app.layout = html.Div([
-        dcc.Store(id="write"),
-        dcc.Store(id="read"),
-        relay.bridge(),
-    ])
+    app.layout = html.Div([dcc.Store(id="a")])
     relay.install(app)
-
-    # Layout has write but not read.
-    layout = html.Div([dcc.Store(id="write"), relay.bridge()])
-    report = relay.validate(layout, app=app)
-    codes = {i.code for i in report.issues}
-    assert "state-not-found" in codes
-    assert "output-not-found" not in codes
+    # Pool drained; validate should still see the handler via app cache.
+    report = relay.validate(app=app)
+    assert report.ok
 
 
-def test_validate_flags_pinned_handler_with_no_emitter_on_its_bridge():
-    # Handler is pinned to bridge "ghost" but no emitter in the layout
-    # writes to that bridge — handler will never fire.
-    @relay.handle(Output("state", "data"), Action("close", bridge="ghost"))
-    def _(event): return {}
+# ---------------------------------------------------------------------------
+# Layout-aware: unreachable-handler and missing-handler
+# ---------------------------------------------------------------------------
 
-    app = Dash(__name__)
-    app.layout = html.Div([dcc.Store(id="state"), relay.bridge("real")])
-    relay.install(app)
+
+def test_validate_flags_unreachable_handler_when_no_emitter_targets_bridge():
+    @relay.callback(Output("a", "data"), Action("close", bridge="ghost"))
+    def _(event): return None
 
     layout = html.Div([
-        dcc.Store(id="state"),
-        relay.bridge("real"),
-        relay.emitter(html.Button("X"), "close", bridge="real"),  # → real bridge
+        dcc.Store(id="a"),
+        Action_emitter("real-bridge", "close"),  # uses different bridge
     ])
-    report = relay.validate(layout, app=app)
+    report = relay.validate(layout)
     codes = {i.code for i in report.issues}
     assert "unreachable-handler" in codes
-    msg = next(i.message for i in report.issues if i.code == "unreachable-handler")
-    assert "ghost" in msg
 
 
-def test_validate_clean_when_pinned_handler_has_matching_emitter():
-    @relay.handle(Output("state", "data"), Action("close", bridge="real"))
-    def _(event): return {}
+def test_validate_flags_missing_handler_when_emitter_has_no_handler():
+    layout = html.Div([
+        dcc.Store(id="a"),
+        Action_emitter("x", "orphaned-action"),
+    ])
+    report = relay.validate(layout)
+    codes = {i.code for i in report.issues}
+    assert "missing-handler" in codes
 
-    app = Dash(__name__)
-    app.layout = html.Div([dcc.Store(id="state"), relay.bridge("real")])
-    relay.install(app)
+
+def test_validate_clean_when_emitter_handler_pair_exists():
+    @relay.callback(Output("a", "data"), Action("close", bridge="bridge-a"))
+    def _(event): return None
 
     layout = html.Div([
-        dcc.Store(id="state"),
-        relay.bridge("real"),
-        relay.emitter(html.Button("X"), "close", bridge="real"),
+        dcc.Store(id="a"),
+        Action_emitter("bridge-a", "close"),
     ])
-    report = relay.validate(layout, app=app)
-    codes = {i.code for i in report.issues}
-    assert "unreachable-handler" not in codes
+    report = relay.validate(layout)
+    assert report.ok, f"unexpected: {report.issues}"
 
 
-def test_validate_clean_when_output_and_state_stores_present():
-    @relay.handle(
-        Output("write", "data"),
-        Action("touch"),
-        State("read", "data"),
-    )
-    def _(event, val): return None
+def test_validate_strict_raises_on_any_issue():
+    @relay.callback(Output("a", "data"), Action("close", bridge="ghost"))
+    def _(event): return None
 
-    app = Dash(__name__)
-    app.layout = html.Div([
-        dcc.Store(id="write"),
-        dcc.Store(id="read"),
-        relay.bridge(),
-        relay.emitter(html.Button("Touch"), "touch"),
-    ])
-    relay.install(app)
+    layout = html.Div([dcc.Store(id="a")])
+    with pytest.raises(relay.UnsafeLayoutError):
+        relay.validate(layout, strict=True)
 
-    report = relay.validate(app.layout, app=app)
-    codes = {i.code for i in report.issues}
-    assert "output-not-found" not in codes
-    assert "state-not-found" not in codes
+
+# ---------------------------------------------------------------------------
+# Helper: build a layout fragment with an emitter (Emitter.attrs splat)
+# ---------------------------------------------------------------------------
+
+
+def Action_emitter(bridge_name, action_name):
+    """Return a Button with relay attrs for the given (bridge, action)."""
+    e = relay.Emitter(bridge=bridge_name)
+    return html.Button("X", **e.attrs(action=action_name))

@@ -28,6 +28,32 @@
     }
   }
 
+  // v4 target encoding (B10): plain string for str/int targets, JSON for
+  // dict targets. Empty -> null. Detect dict by leading "{" or "[", int
+  // by all-digit (with optional leading sign), else string.
+  var INT_PATTERN = /^-?\d+$/;
+  function parseTargetAttr(raw) {
+    if (raw === null || raw === undefined || raw === "") return null;
+    var first = raw.charAt(0);
+    if (first === "{" || first === "[") {
+      try {
+        return JSON.parse(raw);
+      } catch (err) {
+        console.warn("dash_relay: failed to parse target dict", err);
+        return null;
+      }
+    }
+    if (INT_PATTERN.test(raw)) {
+      var n = parseInt(raw, 10);
+      if (!isNaN(n)) return n;
+    }
+    return raw;
+  }
+
+  function readSourceAttr(raw) {
+    return raw === null || raw === undefined || raw === "" ? null : raw;
+  }
+
   function extractEventFields(event) {
     var out = {};
     var target = event.target;
@@ -69,9 +95,9 @@
 
     var payload = {
       action: start.dataset.relayAction,
-      target: parseJsonAttr(start.dataset.relayTarget, "target"),
+      target: parseTargetAttr(start.dataset.relayTarget),
       payload: parseJsonAttr(start.dataset.relayPayload, "payload"),
-      source: parseJsonAttr(start.dataset.relaySource, "source"),
+      source: readSourceAttr(start.dataset.relaySource),
       bridge: bridge,
       event_type: event.type,
       native: extractEventFields(event),

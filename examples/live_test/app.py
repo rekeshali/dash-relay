@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import dash_relay as relay
-from dash_relay import Action
+from dash_relay import Action, Emitter
 
 
 BADGE_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#f59e0b", "#059669"]
@@ -159,7 +159,7 @@ def _payload(event: dict) -> dict:
     return event.get("payload") or {}
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.add"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.add"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     kind = _payload(event).get("kind", "timeseries")
@@ -168,7 +168,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.delete"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.delete"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     tid = event.get("target")
@@ -176,7 +176,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.duplicate"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.duplicate"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -191,7 +191,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.drawer.toggle"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.drawer.toggle"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -201,7 +201,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.lock.toggle"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.lock.toggle"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -211,7 +211,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.kind.set"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.kind.set"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -221,7 +221,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.badge.add"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.badge.add"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -231,7 +231,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.badge.cycle"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.badge.cycle"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -241,7 +241,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.badge.remove"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.badge.remove"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     panel = find_panel(state, event.get("target"))
@@ -251,7 +251,7 @@ def _(event, state):
     return state
 
 
-@relay.handle(Output("app-state", "data"), Action("panel.setting"), State("app-state", "data"))
+@relay.callback(Output("app-state", "data"), Action("panel.setting"), State("app-state", "data"))
 def _(event, state):
     state = deepcopy(state) if state is not None else default_state()
     payload = _payload(event)
@@ -262,14 +262,13 @@ def _(event, state):
     return state
 
 
-relay.install(app)
-
-
 def apply_event(state: dict, event: dict | None) -> dict:
     """Thin wrapper used by tests: dispatches one relay event through the dispatcher."""
     if not event:
         return state
-    result = app._dash_relay_dispatcher(event, state)
+    bridge_name = event.get("bridge") or relay.DEFAULT_BRIDGE
+    plan = app._dash_relay_bridge_plans[bridge_name]
+    result = plan.dispatch(event, state)
     return state if result is no_update else result
 
 
@@ -347,12 +346,11 @@ def settings_controls(panel: dict):
             html.Div("Retype panel", className="panel-section-title"),
             html.Div(
                 [
-                    relay.emitter(
+                    Emitter(action="panel.kind.set", target=pid, payload={"kind": k}).wrap(
                         html.Button(
                             KIND_SPECS[k]["label"],
                             className=("mini-btn is-active" if kind == k else "mini-btn"),
-                        ),
-                        "panel.kind.set", target=pid, payload={"kind": k},
+                        )
                     )
                     for k in KIND_ORDER
                 ],
@@ -362,20 +360,20 @@ def settings_controls(panel: dict):
         className="settings-block",
     )
 
-    # One emitter per action, reused across buttons that share the same target.
-    badge_add = relay.emitter("panel.badge.add", target=pid)
-    badge_cycle = relay.emitter("panel.badge.cycle", target=pid)
-    badge_remove = relay.emitter("panel.badge.remove", target=pid)
-    setting = relay.emitter("panel.setting", target=pid)
+    # One template per action; reused across buttons that share the same target.
+    badge_add = Emitter(action="panel.badge.add", target=pid)
+    badge_cycle = Emitter(action="panel.badge.cycle", target=pid)
+    badge_remove = Emitter(action="panel.badge.remove", target=pid)
+    setting = Emitter(action="panel.setting", target=pid)
 
     badges = html.Div(
         [
             html.Div("Badges", className="panel-section-title"),
             html.Div(
                 [
-                    badge_add(html.Button("Add", className="mini-btn")),
-                    badge_cycle(html.Button("Cycle Color", className="mini-btn")),
-                    badge_remove(html.Button("Remove Last", className="mini-btn")),
+                    badge_add.wrap(html.Button("Add", className="mini-btn")),
+                    badge_cycle.wrap(html.Button("Cycle Color", className="mini-btn")),
+                    badge_remove.wrap(html.Button("Remove Last", className="mini-btn")),
                 ],
                 className="mini-btn-row",
             ),
@@ -388,15 +386,15 @@ def settings_controls(panel: dict):
             html.Div("Trace controls", className="panel-section-title"),
             html.Div(
                 [
-                    setting(html.Button("Width -", className="mini-btn"),
+                    setting.wrap(html.Button("Width -", className="mini-btn"),
                             payload={"mode": "bump", "key": "line_width", "delta": -1, "minimum": 1, "maximum": 6}),
-                    setting(html.Button("Width +", className="mini-btn"),
+                    setting.wrap(html.Button("Width +", className="mini-btn"),
                             payload={"mode": "bump", "key": "line_width", "delta": 1, "minimum": 1, "maximum": 6}),
-                    setting(html.Button("Cycle Style", className="mini-btn"),
+                    setting.wrap(html.Button("Cycle Style", className="mini-btn"),
                             payload={"mode": "cycle", "key": "line_style", "values": ["solid", "dash", "dot"]}),
-                    setting(html.Button("Toggle Markers", className="mini-btn"),
+                    setting.wrap(html.Button("Toggle Markers", className="mini-btn"),
                             payload={"mode": "toggle", "key": "show_markers"}),
-                    setting(html.Button("Smoothing", className="mini-btn"),
+                    setting.wrap(html.Button("Smoothing", className="mini-btn"),
                             payload={"mode": "cycle", "key": "smoothing", "values": ["off", "light", "heavy"]}),
                 ],
                 className="mini-btn-row",
@@ -408,15 +406,15 @@ def settings_controls(panel: dict):
             html.Div("Distribution controls", className="panel-section-title"),
             html.Div(
                 [
-                    setting(html.Button("Bins -", className="mini-btn"),
+                    setting.wrap(html.Button("Bins -", className="mini-btn"),
                             payload={"mode": "bump", "key": "bins", "delta": -2, "minimum": 4, "maximum": 24}),
-                    setting(html.Button("Bins +", className="mini-btn"),
+                    setting.wrap(html.Button("Bins +", className="mini-btn"),
                             payload={"mode": "bump", "key": "bins", "delta": 2, "minimum": 4, "maximum": 24}),
-                    setting(html.Button("Normalize", className="mini-btn"),
+                    setting.wrap(html.Button("Normalize", className="mini-btn"),
                             payload={"mode": "toggle", "key": "normalize"}),
-                    setting(html.Button("Cumulative", className="mini-btn"),
+                    setting.wrap(html.Button("Cumulative", className="mini-btn"),
                             payload={"mode": "toggle", "key": "cumulative"}),
-                    setting(html.Button("Reference Lines", className="mini-btn"),
+                    setting.wrap(html.Button("Reference Lines", className="mini-btn"),
                             payload={"mode": "toggle", "key": "reference_lines"}),
                 ],
                 className="mini-btn-row",
@@ -428,15 +426,15 @@ def settings_controls(panel: dict):
             html.Div("Scatter controls", className="panel-section-title"),
             html.Div(
                 [
-                    setting(html.Button("Size -", className="mini-btn"),
+                    setting.wrap(html.Button("Size -", className="mini-btn"),
                             payload={"mode": "bump", "key": "marker_size", "delta": -1, "minimum": 2, "maximum": 12}),
-                    setting(html.Button("Size +", className="mini-btn"),
+                    setting.wrap(html.Button("Size +", className="mini-btn"),
                             payload={"mode": "bump", "key": "marker_size", "delta": 1, "minimum": 2, "maximum": 12}),
-                    setting(html.Button("Trendline", className="mini-btn"),
+                    setting.wrap(html.Button("Trendline", className="mini-btn"),
                             payload={"mode": "toggle", "key": "trendline"}),
-                    setting(html.Button("Density", className="mini-btn"),
+                    setting.wrap(html.Button("Density", className="mini-btn"),
                             payload={"mode": "toggle", "key": "density_overlay"}),
-                    setting(html.Button("Palette", className="mini-btn"),
+                    setting.wrap(html.Button("Palette", className="mini-btn"),
                             payload={"mode": "cycle", "key": "palette", "values": ["blue", "teal", "rose"]}),
                 ],
                 className="mini-btn-row",
@@ -457,24 +455,24 @@ def render_panel(panel: dict):
 
     header_actions = html.Div(
         [
-            relay.emitter(
+            Emitter(action="panel.drawer.toggle", target=pid).wrap(
                 html.Button(
                     "Settings",
                     className=("panel-icon-btn is-active" if panel["expanded"] else "panel-icon-btn"),
-                ),
-                "panel.drawer.toggle", target=pid,
+                )
             ),
-            relay.emitter(
+            Emitter(action="panel.lock.toggle", target=pid).wrap(
                 html.Button(
                     "Lock" if not locked else "Unlock",
                     className=("panel-icon-btn is-active" if locked else "panel-icon-btn"),
-                ),
-                "panel.lock.toggle", target=pid,
+                )
             ),
-            relay.emitter(html.Button("Duplicate", className="panel-icon-btn"),
-                  "panel.duplicate", target=pid),
-            relay.emitter(html.Button("Delete", className="panel-icon-btn danger"),
-                  "panel.delete", target=pid),
+            Emitter(action="panel.duplicate", target=pid).wrap(
+                html.Button("Duplicate", className="panel-icon-btn")
+            ),
+            Emitter(action="panel.delete", target=pid).wrap(
+                html.Button("Delete", className="panel-icon-btn danger")
+            ),
         ],
         className="panel-header-actions",
     )
@@ -520,7 +518,6 @@ app.layout = html.Div(
     className="demo-shell",
     children=[
         dcc.Store(id="app-state", data=default_state()),
-        relay.bridge(),
         html.Div(
             [
                 html.Div(
@@ -534,12 +531,15 @@ app.layout = html.Div(
                 ),
                 html.Div(
                     [
-                        relay.emitter(html.Button("Add Time Series", className="add-panel-btn"),
-                              "panel.add", payload={"kind": "timeseries"}),
-                        relay.emitter(html.Button("Add Histogram", className="add-panel-btn"),
-                              "panel.add", payload={"kind": "histogram"}),
-                        relay.emitter(html.Button("Add Scatter", className="add-panel-btn"),
-                              "panel.add", payload={"kind": "scatter"}),
+                        Emitter(action="panel.add", payload={"kind": "timeseries"}).wrap(
+                            html.Button("Add Time Series", className="add-panel-btn")
+                        ),
+                        Emitter(action="panel.add", payload={"kind": "histogram"}).wrap(
+                            html.Button("Add Histogram", className="add-panel-btn")
+                        ),
+                        Emitter(action="panel.add", payload={"kind": "scatter"}).wrap(
+                            html.Button("Add Scatter", className="add-panel-btn")
+                        ),
                     ],
                     className="toolbar-row",
                 ),
@@ -557,6 +557,11 @@ def render_panels(state):
     if not panels:
         return [html.Div("No panels left. Add a new one from the toolbar.", className="empty-state")]
     return [render_panel(p) for p in panels]
+
+
+# install() last — drains the @relay.callback pool, mints the bridge
+# store, injects it into the layout, and wires the dispatcher Dash callback.
+relay.install(app)
 
 
 if __name__ == "__main__":

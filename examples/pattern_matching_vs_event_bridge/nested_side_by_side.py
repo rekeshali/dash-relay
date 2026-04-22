@@ -37,7 +37,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import dash_relay as relay
-from dash_relay import Action
+from dash_relay import Action, Emitter
 
 
 # ---------------------------------------------------------------------------
@@ -298,32 +298,39 @@ def _render_ld_column(state):
     folder = _active_folder(state)
     tab = _active_tab(state)
 
+    _label = {"border": "none", "background": "none", "cursor": "pointer",
+              "padding": "0", "fontSize": "13px"}
+
     folder_tiles = []
     for f in state["folders"]:
         style = {**_CARD, **(_ACTIVE if f["id"] == active_fid else {})}
         folder_tiles.append(html.Div([
-            relay.emitter(
-                html.Button(f["name"], style={"border": "none", "background": "none",
-                                              "cursor": "pointer", "padding": "0", "fontSize": "13px"}),
-                "folder.activate", target=f["id"], bridge="relay-bridge",
+            Emitter(action="folder.activate", bridge="relay-bridge", target=f["id"]).wrap(
+                html.Button(f["name"], style=_label)
             ),
-            relay.emitter(html.Button("×", style=_BTN), "folder.delete", target=f["id"], bridge="relay-bridge"),
+            Emitter(action="folder.delete", bridge="relay-bridge", target=f["id"]).wrap(
+                html.Button("×", style=_BTN)
+            ),
         ], style=style))
-    folder_tiles.append(relay.emitter(html.Button("+ Folder", style=_BTN), "folder.add", bridge="relay-bridge"))
+    folder_tiles.append(
+        Emitter(action="folder.add", bridge="relay-bridge").wrap(html.Button("+ Folder", style=_BTN))
+    )
 
     tab_tiles = []
     if folder:
         for t in folder["tabs"]:
             style = {**_CARD, **(_ACTIVE if tab and t["id"] == tab["id"] else {})}
             tab_tiles.append(html.Div([
-                relay.emitter(
-                    html.Button(t["name"], style={"border": "none", "background": "none",
-                                                  "cursor": "pointer", "padding": "0", "fontSize": "13px"}),
-                    "tab.activate", target=t["id"], bridge="relay-bridge",
+                Emitter(action="tab.activate", bridge="relay-bridge", target=t["id"]).wrap(
+                    html.Button(t["name"], style=_label)
                 ),
-                relay.emitter(html.Button("×", style=_BTN), "tab.delete", target=t["id"], bridge="relay-bridge"),
+                Emitter(action="tab.delete", bridge="relay-bridge", target=t["id"]).wrap(
+                    html.Button("×", style=_BTN)
+                ),
             ], style=style))
-        tab_tiles.append(relay.emitter(html.Button("+ Tab", style=_BTN), "tab.add", bridge="relay-bridge"))
+        tab_tiles.append(
+            Emitter(action="tab.add", bridge="relay-bridge").wrap(html.Button("+ Tab", style=_BTN))
+        )
 
     panel_cards = []
     if tab:
@@ -332,13 +339,19 @@ def _render_ld_column(state):
                 html.Div(p["name"], style={"fontWeight": "600", "fontSize": "13px"}),
                 html.Span(p["kind"], style=_KIND_BADGE),
                 html.Div([
-                    relay.emitter(html.Button("dup", style=_BTN), "panel.duplicate", target=p["id"], bridge="relay-bridge"),
-                    relay.emitter(html.Button("×", style=_BTN), "panel.delete", target=p["id"], bridge="relay-bridge"),
+                    Emitter(action="panel.duplicate", bridge="relay-bridge", target=p["id"]).wrap(
+                        html.Button("dup", style=_BTN)
+                    ),
+                    Emitter(action="panel.delete", bridge="relay-bridge", target=p["id"]).wrap(
+                        html.Button("×", style=_BTN)
+                    ),
                 ], style={"display": "flex", "gap": "4px", "marginTop": "auto"}),
             ], style=_PANEL_CARD))
 
     add_panel_buttons = html.Div([
-        relay.emitter(html.Button(f"+ {k}", style=_BTN), "panel.add", payload={"kind": k}, bridge="relay-bridge")
+        Emitter(action="panel.add", bridge="relay-bridge", payload={"kind": k}).wrap(
+            html.Button(f"+ {k}", style=_BTN)
+        )
         for k in KINDS
     ], style={"display": "flex", "gap": "6px", "marginTop": "10px"})
 
@@ -1004,63 +1017,63 @@ def _relay_state(s):
     return deepcopy(s) if s is not None else initial_state()
 
 
-@relay.handle(_RELAY_OUTPUT, Action("folder.add"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("folder.add", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_folder_add(s)
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("folder.activate"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("folder.activate", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_folder_activate(s, event["target"])
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("folder.delete"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("folder.delete", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_folder_delete(s, event["target"])
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("tab.add"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("tab.add", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_tab_add(s)
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("tab.activate"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("tab.activate", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_tab_activate(s, event["target"])
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("tab.delete"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("tab.delete", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_tab_delete(s, event["target"])
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("panel.add"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("panel.add", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_panel_add(s, (event.get("payload") or {}).get("kind", "timeseries"))
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("panel.delete"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("panel.delete", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_panel_delete(s, event["target"])
     return s
 
 
-@relay.handle(_RELAY_OUTPUT, Action("panel.duplicate"), _RELAY_STATE)
+@relay.callback(_RELAY_OUTPUT, Action("panel.duplicate", bridge="relay-bridge"), _RELAY_STATE)
 def _(event, s):
     s = _relay_state(s)
     do_panel_duplicate(s, event["target"])
@@ -1143,8 +1156,11 @@ _RELAY_CB_COUNT = _count_callbacks("relay-")
 # to all of them by action name), so they don't inflate phantom-fire cost
 # the way pattern-matching callbacks do. But they're still code we wrote.
 # Counted from the pending pool BEFORE relay.install(app) drains it.
-from dash_relay.handle import _PENDING_HANDLERS as _relay_pending
-_RELAY_HANDLER_COUNT = sum(1 for h in _relay_pending if h.action.name.split(".")[0] in ("folder", "tab", "panel"))
+from dash_relay.callback import _PENDING_CALLBACKS as _relay_pending
+_RELAY_HANDLER_COUNT = sum(
+    1 for h in _relay_pending
+    if any(a.name.split(".")[0] in ("folder", "tab", "panel") for a in h.actions)
+)
 _PD_LINES = _count_source_lines("PD-ACTIONS-BEGIN", "PD-ACTIONS-END")
 _RELAY_LINES = _count_source_lines("RELAY-ACTIONS-BEGIN", "RELAY-ACTIONS-END")
 
@@ -1217,7 +1233,6 @@ app.layout = html.Div([
     ),
     dcc.Store(id="pd-state", data=initial_state()),
     dcc.Store(id="relay-state", data=initial_state()),
-    relay.bridge("relay-bridge"),
     html.Div([
         _column(
             "Pure Dash",

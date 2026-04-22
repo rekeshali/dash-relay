@@ -1,107 +1,200 @@
+"""The ``Emitter`` template class.
+
+An ``Emitter`` is a reusable template of relay-event metadata. The same
+template can be materialized two ways:
+
+  * ``.attrs(...)`` — returns a dict of ``data-relay-*`` HTML attributes
+    suitable for splatting onto an existing component (no wrapper Div,
+    so CSS ``>`` child selectors and direct-child flex/grid still work).
+  * ``.wrap(component, ...)`` — wraps the given component in a transparent
+    ``display: contents`` div carrying the attributes; convenient when
+    you don't want to (or can't) splat onto the target.
+
+Both methods accept overrides via keyword arguments. **Override
+semantics are replace, not merge.** To merge a payload, do it
+explicitly: ``payload={**e.payload, "scope": new_scope}``.
+"""
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any
 
 from dash import html
 
-from .bridge import DEFAULT_BRIDGE_ID
+from .action import DEFAULT_BRIDGE
 
 
-_WRAP_STYLE = {"display": "contents"}
+_TEMPLATE_KEYS = (
+    "action",
+    "bridge",
+    "target",
+    "payload",
+    "source",
+    "on",
+    "prevent_default",
+)
 
 
-def _wrap(
-    component,
-    *,
-    action: str,
-    payload: Any = None,
-    on: str = "click",
-    bridge: str = DEFAULT_BRIDGE_ID,
-    target: Any = None,
-    source: Any = None,
-    prevent_default: bool = False,
-):
-    if not isinstance(action, str) or not action.strip():
-        raise ValueError("emitter(): action must be a non-empty string")
-    if not isinstance(on, str) or not on.strip():
-        raise ValueError("emitter(): on must be a non-empty string")
+class Emitter:
+    """Reusable template for relay-event emission.
 
+    All constructor fields are optional; overrides at ``.wrap()`` /
+    ``.attrs()`` time replace the corresponding template field.
+
+    The ``action`` field is required by the time you call ``.wrap()`` or
+    ``.attrs()``. If neither the template nor the overrides set it,
+    materialization raises ``ValueError``. ``bridge`` defaults to
+    ``DEFAULT_BRIDGE`` if unset on both sides.
+    """
+
+    def __init__(
+        self,
+        action: str | None = None,
+        bridge: str | None = None,
+        target: Any = None,
+        payload: dict | None = None,
+        source: str | None = None,
+        on: str = "click",
+        prevent_default: bool = False,
+    ):
+        self.action = action
+        self.bridge = bridge
+        self.target = target
+        self.payload = payload
+        self.source = source
+        self.on = on
+        self.prevent_default = prevent_default
+
+    # -- materialization -----------------------------------------------------
+
+    def attrs(self, **overrides) -> dict:
+        """Return a dict of ``data-relay-*`` attributes.
+
+        Splat onto an existing Dash component:
+
+            html.Button("Pin", **emitter.attrs(action="pin", target=row_id))
+
+        Useful when you can't accept a wrapper Div (CSS direct-child
+        selectors, flex/grid child positioning, etc.).
+        """
+        merged = self._merge(overrides)
+        return _build_attrs(merged)
+
+    def wrap(self, component, **overrides):
+        """Return ``component`` wrapped in a transparent div carrying the attrs.
+
+        Equivalent to ``html.Div([component], style={'display': 'contents'},
+        **self.attrs(**overrides))``. Use this when splatting onto the
+        component isn't possible (e.g. third-party components that
+        don't forward arbitrary HTML attributes).
+
+        If ``source`` isn't set on either the template or the overrides,
+        and the wrapped component has an ``id=``, ``source`` is auto-filled
+        with that id.
+        """
+        merged = self._merge(overrides)
+        # B9: auto-fill source from component id if neither side specified one.
+        if merged.get("source") is None:
+            cid = _component_id(component)
+            if isinstance(cid, str):
+                merged["source"] = cid
+        attrs = _build_attrs(merged)
+        return html.Div([component], style={"display": "contents"}, **attrs)
+
+    # -- internals -----------------------------------------------------------
+
+    def _merge(self, overrides: dict) -> dict:
+        unknown = set(overrides) - set(_TEMPLATE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"Emitter override got unexpected keyword(s): {sorted(unknown)}. "
+                f"Allowed: {list(_TEMPLATE_KEYS)}."
+            )
+        merged = {k: getattr(self, k) for k in _TEMPLATE_KEYS}
+        # Replace, not merge — overrides are absolute.
+        merged.update(overrides)
+        return merged
+
+
+# ---------------------------------------------------------------------------
+# Attribute building
+# ---------------------------------------------------------------------------
+
+
+def _component_id(component) -> Any:
+    if hasattr(component, "to_plotly_json"):
+        return component.to_plotly_json().get("props", {}).get("id")
+    if hasattr(component, "id"):
+        return getattr(component, "id", None)
+    return None
+
+
+def _encode_target(target: Any) -> str:
+    """Encode a target value for the DOM ``data-relay-target`` attribute (B10).
+
+    Plain string for ``str`` and ``int``; compact JSON for ``dict``. The
+    encoding is selectable by CSS attribute selectors without escape
+    gymnastics. Tradeoff: a ``str`` value that happens to look like a
+    digit string round-trips as ``int`` because the wire encoding is
+    lossy on that distinction. If you need a digit-string preserved,
+    wrap it in a dict (e.g. ``target={"id": "42"}``).
+    """
+    if target is None:
+        return ""
+    if isinstance(target, bool):
+        # bool is a subclass of int — handle explicitly so True doesn't
+        # encode as "1" silently.
+        raise TypeError(
+            "Emitter target must be str, int, or dict — got bool. "
+            "Wrap in a dict if you need to carry a boolean."
+        )
+    if isinstance(target, (str, int)):
+        return str(target)
+    if isinstance(target, dict):
+        try:
+            return json.dumps(target, separators=(",", ":"))
+        except TypeError as exc:
+            raise ValueError(
+                "Emitter target dict must be JSON-serializable"
+            ) from exc
+    raise TypeError(
+        f"Emitter target must be str, int, or dict (got {type(target).__name__})"
+    )
+
+
+def _encode_payload(payload: Any) -> str:
+    """Payload is always JSON-encoded — it's a dict by contract."""
+    if payload is None:
+        return ""
+    if not isinstance(payload, dict):
+        raise TypeError(
+            f"Emitter payload must be a dict (got {type(payload).__name__})"
+        )
     try:
-        payload_json = json.dumps(payload)
-        target_json = json.dumps(target)
-        source_json = json.dumps(source)
+        return json.dumps(payload, separators=(",", ":"))
     except TypeError as exc:
-        raise ValueError("emitter(): payload, target, and source must be JSON serializable") from exc
+        raise ValueError("Emitter payload must be JSON-serializable") from exc
+
+
+def _build_attrs(merged: dict) -> dict:
+    action = merged.get("action")
+    if action is None or not str(action).strip():
+        raise ValueError(
+            "Emitter requires an action; set on constructor or at "
+            "wrap()/attrs() time."
+        )
+    bridge = merged.get("bridge") or DEFAULT_BRIDGE
+    on = merged.get("on") or "click"
+    if not isinstance(on, str) or not on.strip():
+        raise ValueError("Emitter 'on' must be a non-empty string")
 
     attrs = {
-        "data-relay-action": action,
+        "data-relay-action": str(action),
+        "data-relay-bridge": bridge,
         "data-relay-on": on,
-        "data-relay-payload": payload_json,
-        "data-relay-bridge": bridge or "",
-        "data-relay-target": target_json,
-        "data-relay-source": source_json,
-        "data-relay-prevent-default": "true" if prevent_default else "false",
+        "data-relay-target": _encode_target(merged.get("target")),
+        "data-relay-payload": _encode_payload(merged.get("payload")),
+        "data-relay-source": str(merged.get("source")) if merged.get("source") is not None else "",
+        "data-relay-prevent-default": "true" if merged.get("prevent_default") else "false",
     }
-
-    return html.Div([component], style=_WRAP_STYLE, **attrs)
-
-
-def emitter(
-    *args,
-    payload: Any = None,
-    on: str = "click",
-    bridge: str = DEFAULT_BRIDGE_ID,
-    target: Any = None,
-    source: Any = None,
-    prevent_default: bool = False,
-) -> Any:
-    """Wrap a Dash component as a Dash Relay event emitter.
-
-    Two forms:
-
-        emitter(component, action, ...) -> wrapped component
-            Wraps `component` so that when the DOM event named by `on=`
-            (default "click") fires on it or any descendant, a payload
-            is written to the target bridge store.
-
-        emitter(action, ...) -> callable
-            Returns a reusable emitter factory `f(component, **extra)` that
-            applies the same action + defaults to any component passed to it.
-            Keyword overrides (e.g. `payload=...`) supplied to `f` override
-            those supplied to `emitter()`.
-
-    Any DOM event name works for `on=`. The client-side handler registers
-    listeners in capture phase, lazily, as new event names appear in the
-    layout — so non-bubbling events (`focus`, `blur`) and custom events
-    dispatched via `element.dispatchEvent(new CustomEvent(...))` work too.
-    See `tests/test_event_types.py` for the verified matrix.
-    """
-    kw = {
-        "payload": payload,
-        "on": on,
-        "bridge": bridge,
-        "target": target,
-        "source": source,
-        "prevent_default": prevent_default,
-    }
-
-    if len(args) == 1 and isinstance(args[0], str):
-        action = args[0]
-
-        def _emitter(component, **extra) -> Any:
-            merged = {**kw, **extra}
-            return _wrap(component, action=action, **merged)
-
-        return _emitter
-
-    if len(args) == 2:
-        component, action = args
-        if not isinstance(action, str):
-            raise TypeError("emitter(): second argument must be the action name (str)")
-        return _wrap(component, action=action, **kw)
-
-    raise TypeError(
-        "emitter() requires either (component, action, ...) or (action, ...) "
-        "to create a reusable emitter factory."
-    )
+    return attrs

@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import dash_relay as relay
-from dash_relay import Action
+from dash_relay import Action, Emitter
 
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -55,7 +55,7 @@ KIND_META = {
 # --- Internal helper: convenience wrapper for action buttons ---------------
 
 def _btn(label, action, *, target=None, payload=None, className=None, style=None, title=None):
-    """Wrap an html.Button with relay.emitter() and default the bridge to UI_EVENT_BRIDGE."""
+    """Build an html.Button carrying relay attrs targeted at UI_EVENT_BRIDGE."""
     kwargs: dict[str, Any] = {}
     if className is not None:
         kwargs["className"] = className
@@ -63,7 +63,8 @@ def _btn(label, action, *, target=None, payload=None, className=None, style=None
         kwargs["style"] = style
     if title is not None:
         kwargs["title"] = title
-    return relay.emitter(html.Button(label, **kwargs), action, target=target, payload=payload, bridge=UI_EVENT_BRIDGE)
+    template = Emitter(action=action, bridge=UI_EVENT_BRIDGE, target=target, payload=payload)
+    return template.wrap(html.Button(label, **kwargs))
 
 
 # --- State factories -------------------------------------------------------
@@ -960,10 +961,10 @@ def _register_handlers() -> None:
 
 
 def _make_handler(action_name, pure_fn):
-    @relay.handle(
+    @relay.callback(
         Output(CANVAS_STORE, "data"),
         Output(EDITOR_STORE, "data"),
-        Action(action_name),
+        Action(action_name, bridge=UI_EVENT_BRIDGE),
         State(CANVAS_STORE, "data"),
         State(EDITOR_STORE, "data"),
     )
@@ -999,7 +1000,6 @@ def build_app() -> Dash:
         id="proof-shell",
         className="proof-shell",
         children=[
-            relay.bridge(id=UI_EVENT_BRIDGE),
             dcc.Store(id=CANVAS_STORE, data=default_canvas_state()),
             dcc.Store(id=EDITOR_STORE, data=default_editor_state()),
             html.Div(

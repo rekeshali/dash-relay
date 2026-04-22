@@ -4,6 +4,141 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] — 2026-04-22
+
+The minimum surface. Bridge stores are minted by the library, the
+emitter API is split into a template class with two materialization
+methods, and the dispatcher consolidates handlers per bridge so
+modern Dash's stricter callback-graph validation works out of the box.
+
+Hard cut. No deprecation, no compatibility shims.
+
+### Surface
+
+```python
+import dash_relay as relay
+from dash_relay import Action, Emitter, DEFAULT_BRIDGE
+from dash import Output, State
+
+relay.install(app)                              # lifecycle entry
+relay.validate(layout=None, *, strict=False, app=None)
+
+Emitter(action=..., bridge=..., target=..., payload=..., source=..., on=..., prevent_default=...)
+    .wrap(component, **overrides) -> Component  # transparent display:contents Div
+    .attrs(**overrides)           -> dict       # raw data-relay-* dict (no wrapper)
+
+@relay.callback(Output(...), Action(...), [Action(...)...], State(...))
+def handler(event, *state_values): ...
+```
+
+Two functions, one decorator, two classes (`Emitter`, `Action`), one
+constant. Bridges are minted automatically from the actions handlers
+declare — there's no `bridge()` factory, no store catalog, no
+`Registry` instance.
+
+### What changed
+
+- **Bridge stores are auto-created by `install()`.** Drop the
+  `relay.bridge(id=...)` factory and the `Bridge` class entirely.
+  `install()` walks the registered `@callback` pool, collects unique
+  bridge names from `Action(...).bridge`, mints one `dcc.Store` per
+  bridge with id `relay-bridge-<slug>` (`.` → `__` for CSS safety),
+  and injects them into the layout.
+
+- **`Emitter` class replaces the `emitter()` factory.** Two
+  materialization methods: `.wrap()` returns a `display: contents`
+  div wrapper (the 3.x default), `.attrs()` returns a dict of
+  `data-relay-*` attributes that splat onto an existing component
+  with no wrapper Div — restoring CSS `>` direct-child selectors,
+  flex/grid child positioning, and DOM queries that the wrapper
+  broke. Override-by-replace template semantics: one `Emitter` reused
+  across many call sites with `attrs(action=...)` per use.
+
+- **One Dash callback per bridge with `allow_duplicate=True` always.**
+  3.x registered N handlers per bridge with overlapping outputs —
+  Dash 4.1's stricter callback-graph validation rejects that pattern.
+  v4 consolidates: `install()` registers one `@app.callback` per
+  bridge whose outputs are the union of every handler's declared
+  outputs (each with `allow_duplicate=True`), and the dispatcher
+  routes by action name internally.
+
+- **`@relay.handle` renamed to `@relay.callback`.** The 3.x parallel
+  with Dash's `@app.callback` was already there; the rename makes it
+  literal. A Dash user reads `@relay.callback(Output, Action, State)`
+  and recognizes the shape immediately.
+
+- **Alias semantics for multiple Actions.** A single
+  `@relay.callback` may declare multiple `Action(...)` deps; the
+  wrapped function fires for each `(bridge, action)` pair. Useful for
+  the "close-or-dismiss" shape and for any case where two action
+  names map to the same handler.
+
+- **Target wire encoding is plain string for str/int, JSON only for
+  dict.** 3.x JSON-encoded all targets, breaking CSS selectors that
+  matched against the resulting attribute. v4 keeps strings as
+  strings, ints as digit-strings, and only escapes to JSON for dict
+  values. Tradeoff documented: a `str` value that looks like a digit
+  string round-trips as `int`. Wrap in a dict if you need to preserve
+  it.
+
+- **`Action(name)` defaults to `DEFAULT_BRIDGE` immediately.** No more
+  wildcard semantics. Every `Action.bridge_id` is a concrete string
+  after construction — either the explicit value or
+  `"dash-relay-bridge"`.
+
+### Lifecycle contract
+
+`install(app)` must be called exactly once per app, after `app.layout`
+is set. Calling it before the layout is set raises `InstallError`.
+Calling it twice raises `InstallError`. Reassigning `app.layout`
+after `install()` removes the bridge stores; the library does not
+re-inject.
+
+### Removed
+
+- `relay.bridge()` / `relay.Bridge` — replaced by automatic store
+  creation.
+- `relay.registry()` / `relay.Registry` — replaced by `@relay.callback`.
+- `relay.emitter()` factory — replaced by `Emitter` class.
+- `@relay.handle` — renamed to `@relay.callback`.
+- `validate(layout, registry=...)` — replaced by
+  `validate(layout, app=...)`. The 3.x `output-not-found`,
+  `state-not-found`, and (3.1) `unreachable-handler` codes are
+  superseded by v4's `unreachable-handler` and `missing-handler`,
+  scoped to relay-specific concerns. (Auto store creation makes
+  `output-not-found` / `state-not-found` mostly obsolete; user-declared
+  output stores are still subject to standard Dash validation.)
+
+### New error type
+
+- `dash_relay.InstallError` — raised by `install()` for lifecycle
+  violations, duplicate `(bridge, action)` registrations, and
+  pattern-matched id rejections in `Output`/`State`.
+
+### Patterns and limits
+
+- Pattern-matched ids (`MATCH`/`ALL`/`ALLSMALLER`) in handler
+  `Output`/`State` are not supported. `install()` raises if any
+  handler declares them. The per-bridge consolidation is incompatible
+  with MATCH-binding semantics. Workaround: write a separate non-relay
+  `@app.callback` for that case.
+
+### Migration
+
+Mechanical from 3.x. Roughly:
+
+1. `relay.bridge(id=...)` → delete (auto-created).
+2. `@relay.handle(...)` → `@relay.callback(...)`.
+3. `relay.emitter(component, action, **kwargs)` →
+   `Emitter(action=action, **kwargs).wrap(component)` (or `.attrs()`
+   splatted onto the component for no wrapper).
+4. `relay.emitter(action, **kwargs)` (curried) →
+   `Emitter(action=action, **kwargs)` (use later via `.wrap()` /
+   `.attrs()`).
+5. Move `relay.install(app)` to AFTER `app.layout = ...`.
+6. Tests using `app._dash_relay_dispatcher(...)` switch to
+   `app._dash_relay_bridge_plans[bridge_name].dispatch(...)`.
+
 ## [3.1.0] — 2026-04-22
 
 `Action` gains an optional `bridge=` kwarg for disambiguating
