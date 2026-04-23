@@ -3,7 +3,7 @@
 The library claims `any DOM event name works for on=`. This file
 launches a real Dash app, mounts one emitter per event type, dispatches
 each event through a real browser via Playwright, and asserts the
-bridge store receives the correct `action` and `event_type`.
+bridge store receives the correct `action` and `type`.
 
 Covers twelve events spanning:
   - common UI events (click, dblclick, input, change, submit, keydown)
@@ -52,31 +52,71 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _build_app() -> Dash:
-    app = Dash(__name__)
-    relay.install(app)
+_ACTIONS = [
+    "click",
+    "dblclick-action",
+    "input-action",
+    "change-action",
+    "submit-action",
+    "keydown-action",
+    "contextmenu-action",
+    "pointerdown-action",
+    "wheel-action",
+    "focus-action",
+    "blur-action",
+    "custom-action",
+]
 
+
+def _build_app() -> Dash:
+    from dash import Input as _Input
+    from dash_relay import Action, Emitter, DEFAULT_BRIDGE
+    from dash_relay.callback import _bridge_store_id, _PENDING_CALLBACKS
+
+    # Ensure a clean handler pool — repeated test runs in the same process
+    # would otherwise accumulate.
+    _PENDING_CALLBACKS.clear()
+
+    # Register one no-op handler per action so install() mints the
+    # default bridge store. The handler returns nothing of consequence;
+    # this test cares about the JS → bridge wire path, not handler logic.
+    for action_name in _ACTIONS:
+        @relay.callback(Output("dummy-state", "data"), Action(action_name))
+        def _(event):
+            return event.get("action")
+
+    app = Dash(__name__)
     app.layout = html.Div([
-        relay.bridge(),
-        relay.emitter(html.Button("click", id="t-click"), "click"),
-        relay.emitter(html.Button("dbl", id="t-dblclick"), "dblclick-action", on="dblclick"),
-        relay.emitter(dcc.Input(id="t-input", placeholder="input"), "input-action", on="input"),
-        relay.emitter(dcc.Input(id="t-change", placeholder="change"), "change-action", on="change"),
-        relay.emitter(html.Button("submit", id="t-submit"), "submit-action", on="submit"),
-        relay.emitter(dcc.Input(id="t-keydown", placeholder="keydown"), "keydown-action", on="keydown"),
-        relay.emitter(html.Div("ctx", id="t-contextmenu"), "contextmenu-action", on="contextmenu"),
-        relay.emitter(html.Div("pd", id="t-pointerdown"), "pointerdown-action", on="pointerdown"),
-        relay.emitter(html.Div("wheel", id="t-wheel"), "wheel-action", on="wheel"),
-        relay.emitter(dcc.Input(id="t-focus", placeholder="focus"), "focus-action", on="focus"),
-        relay.emitter(dcc.Input(id="t-blur", placeholder="blur"), "blur-action", on="blur"),
-        relay.emitter(html.Div("custom", id="t-custom"), "custom-action", on="my-custom-event"),
+        dcc.Store(id="dummy-state"),
+        Emitter(action="click").wrap(html.Button("click", id="t-click")),
+        Emitter(action="dblclick-action", on="dblclick").wrap(html.Button("dbl", id="t-dblclick")),
+        Emitter(action="input-action", on="input").wrap(dcc.Input(id="t-input", placeholder="input")),
+        Emitter(action="change-action", on="change").wrap(dcc.Input(id="t-change", placeholder="change")),
+        Emitter(action="submit-action", on="submit").wrap(html.Button("submit", id="t-submit")),
+        Emitter(action="keydown-action", on="keydown").wrap(dcc.Input(id="t-keydown", placeholder="keydown")),
+        Emitter(action="contextmenu-action", on="contextmenu").wrap(html.Div("ctx", id="t-contextmenu")),
+        Emitter(action="pointerdown-action", on="pointerdown").wrap(html.Div("pd", id="t-pointerdown")),
+        Emitter(action="wheel-action", on="wheel").wrap(html.Div("wheel", id="t-wheel")),
+        Emitter(action="focus-action", on="focus").wrap(dcc.Input(id="t-focus", placeholder="focus")),
+        Emitter(action="blur-action", on="blur").wrap(dcc.Input(id="t-blur", placeholder="blur")),
+        Emitter(action="custom-action", on="my-custom-event").wrap(html.Div("custom", id="t-custom")),
         html.Pre(id="bridge-view"),
     ])
 
-    @app.callback(Output("bridge-view", "children"), Input("bridge", "data"))
+    # Debug callback: mirror the (auto-minted) bridge store into a visible
+    # element so the test can read what the JS wrote.
+    bridge_store_id = _bridge_store_id(DEFAULT_BRIDGE)
+
+    @app.callback(
+        Output("bridge-view", "children"),
+        _Input(bridge_store_id, "data"),
+        allow_duplicate=True,
+        prevent_initial_call=True,
+    )
     def show(data):
         return json.dumps(data) if data else ""
 
+    relay.install(app)
     return app
 
 
@@ -160,7 +200,7 @@ def _dispatch_and_wait(page, js: str, expected_action: str, timeout: float = 5.0
 
 # Each row: (test_id, expected_action, expected_event_type, dispatch_js)
 # dispatch_js is evaluated in the page — it triggers the event and should
-# result in the bridge store receiving an envelope with .action and .event_type.
+# result in the bridge store receiving an envelope with .action and .type.
 EVENT_CASES = [
     (
         "click",
@@ -258,12 +298,12 @@ def test_event_type_flows_to_bridge(
     page, case_id, expected_action, expected_event_type, dispatch_js,
 ):
     ev = _dispatch_and_wait(page, dispatch_js, expected_action)
-    assert ev["event_type"] == expected_event_type, (
-        f"expected event_type={expected_event_type!r}, got {ev['event_type']!r}"
+    assert ev["type"] == expected_event_type, (
+        f"expected type={expected_event_type!r}, got {ev['type']!r}"
     )
     assert ev["action"] == expected_action
     # Every envelope should carry the mandatory keys.
-    for key in ("action", "target", "source", "bridge", "event_type", "native", "timestamp"):
+    for key in ("action", "target", "source", "bridge", "type", "details", "timestamp"):
         assert key in ev, f"missing {key} in envelope: {ev}"
 
 

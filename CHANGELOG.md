@@ -4,6 +4,203 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-04-22
+
+First major version after 1.1.2. The dispatch surface is rebuilt
+around Dash's own callback primitives, bridge stores are minted by
+the library at install time, and the emitter API is split into a
+template class with two materialization methods. The library shrinks
+to one decorator + one class for emitting + one class for action
+references + two functions + one constant.
+
+Hard cut from 1.x. No deprecation, no compatibility shims.
+
+### Public surface
+
+```python
+import dash_relay as relay
+from dash_relay import Action, Emitter, DEFAULT_BRIDGE
+from dash import Output, State
+
+relay.install(app)                                            # lifecycle entry
+relay.validate(layout=None, *, strict=False, app=None)        # correctness linter
+
+Emitter(action=..., bridge=..., target=..., payload=..., source=..., on=..., prevent_default=...)
+    .wrap(component, **overrides) -> Component                # transparent display:contents Div
+    .attrs(**overrides)           -> dict                     # raw data-relay-* dict (no wrapper)
+
+@relay.callback(Output(...), Action(...), [Action(...)...], State(...))
+def handler(event, *state_values): ...
+```
+
+The handler signature mirrors plain Dash callbacks: arguments appear
+in declaration order, with `Output` declarations skipped (response
+targets, not handler inputs). The `Action` slot becomes the event
+envelope; each `State` slot becomes the current store value.
+
+### Migration from 1.1.2
+
+| 1.1.2 | 2.0.0 |
+|---|---|
+| `relay.bridge(id=...)` in layout | delete (auto-minted by `install()`) |
+| `events = relay.registry(app, state="x")` | `@relay.callback(Output("x", "data"), Action("..."), State("x", "data"))` per handler |
+| `events = relay.registry(app, state=["a", "b"])` | each handler declares only its own `Output(...)` and `State(...)` deps |
+| `@events.handler("foo")` | `@relay.callback(Output(...), Action("foo"), State(...))` |
+| `def _(state, payload, event):` | `def _(event, state):` (positional, mirrors Dash) |
+| `def _(states, payload, event):` (multi-state) | `def _(event, a, b):` for `State("a", ...), State("b", ...)` |
+| `state["x"] += 1; return state` | `return {**state, "x": state["x"] + 1}` (or mutate a `deepcopy` and return) |
+| `events.dispatch(event, state)` (test wrapper) | `app._dash_relay_bridge_plans[bridge_name].dispatch(event, state)` |
+| `relay.emitter(component, action, **kwargs)` | `Emitter(action=action, **kwargs).wrap(component)` |
+| `relay.emitter(component, action, **kwargs)` (CSS-direct-child case) | `html.Button(..., **Emitter(action=action, **kwargs).attrs())` (no wrapper Div) |
+| `relay.emitter(action, **kwargs)` (curried) | `Emitter(action=action, **kwargs)` (then `.wrap()` / `.attrs()` at use sites) |
+| `relay.install(app)` (any time) | `relay.install(app)` AFTER `app.layout = ...` (lifecycle requirement) |
+| `event["event_type"]` | `event["type"]` |
+| `event["native"]` | `event["details"]` |
+
+### Architecture
+
+- **Bridge stores are auto-minted by `install()`.** No more
+  user-constructed `relay.bridge()` factory or explicit catalog.
+  `install()` walks the registered `@callback` pool, collects unique
+  bridge names from `Action(...).bridge`, mints one `dcc.Store` per
+  bridge with id `relay-bridge-<slug>` (where `slug` replaces `.`
+  with `__` for CSS-selector safety), and injects them at the layout
+  root. Per-bridge stores never appear in user-written layout code.
+
+- **`Emitter` class replaces the `emitter()` factory.** Two
+  materialization methods. `.wrap()` returns the transparent
+  `display: contents` Div wrapper (the 1.x default). `.attrs()`
+  returns a dict of `data-relay-*` attributes that splat onto an
+  existing component with no wrapper Div, restoring CSS `>`
+  direct-child selectors, flex/grid child positioning, and DOM
+  queries that the wrapper broke. Override-by-replace template
+  semantics: one `Emitter` reused across many call sites with
+  `attrs(action=...)` per use.
+
+- **One Dash callback per bridge with `allow_duplicate=True` always.**
+  Modern Dash's stricter callback-graph validation rejects multiple
+  callbacks with overlapping outputs on the same Input. v2
+  consolidates: `install()` registers one `@app.callback` per bridge
+  whose outputs are the union of every handler's declared outputs
+  (each with `allow_duplicate=True`), and the dispatcher routes by
+  action name internally.
+
+- **`@relay.callback` mirrors `@app.callback` exactly.** Same
+  `Output` / `Input` / `State` ordering, same return shape rules,
+  same positional handler signature. The only substitution is `Action`
+  in the slot where `Input` would go. Anyone reading `@relay.callback(
+  Output, Action, State)` and recognizing the shape needs zero new
+  vocabulary beyond what `Action` is.
+
+- **Alias semantics for multiple Actions.** A single `@relay.callback`
+  may declare multiple `Action(...)` deps; the wrapped function fires
+  for every listed `(bridge, action)` pair. Useful for the
+  "close-or-dismiss" shape and for any case where two action names
+  map to the same handler.
+
+- **Target wire encoding is plain string for str/int, JSON only for
+  dict.** 1.x JSON-encoded all targets, breaking CSS selectors that
+  matched against the resulting attribute. v2 keeps strings as
+  strings, ints as digit-strings, and only escapes to JSON for dict
+  values. Tradeoff documented: a `str` value that looks like a digit
+  string round-trips as `int`. Wrap in a dict if you need to preserve
+  it.
+
+### Lifecycle contract
+
+`install(app)` must be called exactly once per app, after `app.layout`
+is set. Calling it before the layout is set raises `InstallError`.
+Calling it twice raises `InstallError`. Reassigning `app.layout`
+after `install()` removes the bridge stores; the library does not
+re-inject.
+
+### Event envelope (frozen for v2)
+
+| key | type | what it is |
+|---|---|---|
+| `action` | `str` | the Action name |
+| `bridge` | `str` | the bridge that fired |
+| `target` | `str` / `int` / `dict` / `None` | user-defined target value, parsed back from the wire |
+| `source` | `str` / `None` | source component id (auto-filled by `Emitter.wrap()` when the wrapped component has an `id`) |
+| `payload` | `dict` / `None` | user-supplied payload |
+| `type` | `str` | DOM event name — same as JS `event.type` |
+| `details` | `dict` | extracted browser fields off the DOM event — same shape as `CustomEvent.detail` |
+| `timestamp` | `float` | seconds since epoch (client clock) |
+
+### `validate()` codes
+
+When `app=app` is passed (post-install):
+
+- `duplicate-handler` — two handlers register the same
+  `(bridge, action)` key. Same condition that causes `InstallError`
+  at install time; this is the pre-flight.
+- `unreachable-handler` — a handler exists for a bridge that no
+  emitter in the supplied layout writes to.
+- `missing-handler` — an emitter targets a `(bridge, action)` key
+  that no handler is registered for.
+
+### Limits
+
+Pattern-matched ids (`MATCH`/`ALL`/`ALLSMALLER`) in handler
+`Output`/`State` are not supported in v2. `install()` raises
+`InstallError`. The per-bridge consolidation is incompatible with
+MATCH-binding semantics. Workaround: write a separate non-relay
+`@app.callback` for that case.
+
+### New error type
+
+`dash_relay.InstallError` — raised by `install()` for lifecycle
+violations, duplicate `(bridge, action)` registrations, and
+pattern-matched id rejections in `Output`/`State`.
+
+### Removed
+
+- `relay.bridge()` / `relay.Bridge` (replaced by automatic store creation)
+- `relay.registry()` / `relay.Registry` (replaced by `@relay.callback`)
+- `relay.emitter()` factory (replaced by `Emitter` class)
+- `validate(layout, registry=...)` (replaced by `validate(layout, app=...)`)
+
+### Iteration history
+
+The 2.0 surface is the result of four design iterations carried out
+on branches that were never published. PyPI's release history shows
+1.0 → 1.0.1 → 1.1.1 → 1.1.2 → 2.0; the intermediate version numbers
+below refer to internal branch labels, not releases.
+
+- **Branch label `2.0` (registry surface alignment).** Renamed `state=`
+  to `output=` and added a separate `state=` kwarg for read-only
+  context; introduced dict-keyed handler args `(outputs, states,
+  payload, event)`. Validated the architectural separation of "this
+  registry writes" vs "this registry reads" but landed on a
+  bespoke surface that didn't mirror Dash's vocabulary.
+
+- **Branch label `3.0` (decorator + Action primitive).** Replaced the
+  `Registry` class with `@relay.handle` decorators that read like
+  Dash callbacks, with `Action` substituting for `Input`. Made the
+  signature mirror Dash's positional convention exactly. This is the
+  shape v2 ships with.
+
+- **Branch label `3.1` (Action(bridge=) for collisions).** Added an
+  optional `bridge=` kwarg on `Action` for cross-bridge action-name
+  disambiguation, with specificity-based routing (pinned beats
+  wildcard). Carried forward into v2's lifecycle (every `Action`
+  resolves to a concrete bridge, defaulting to `DEFAULT_BRIDGE`).
+
+- **Branch label `4.0` (auto-minted bridges + Emitter class +
+  per-bridge consolidation).** Removed the user-facing `bridge()`
+  factory; `install()` mints stores from the registered handler pool.
+  Renamed `@relay.handle` to `@relay.callback` to make the Dash
+  parallel literal. Replaced the `emitter()` factory with the
+  `Emitter` class so `.attrs()` could provide a raw-attribute splat
+  with no wrapper Div. Consolidated to one Dash callback per bridge
+  with `allow_duplicate=True` to satisfy modern Dash's callback-graph
+  validation. Renamed event-envelope keys `event_type → type` and
+  `native → details` to align with DOM/JS vocabulary.
+
+The branch labels were internal nomenclature; nothing in that
+sequence ever shipped to PyPI. The single 2.0 entry above documents
+the surface that ships.
+
 ## [1.1.2] — 2026-04-18
 
 First release shipped via the new GitHub Actions Trusted-Publishing
@@ -16,7 +213,7 @@ same path: tag `vX.Y.Z`, push the tag, approve the prod step.
 **Breaking kwarg renames on the public surface.** Normally these would
 force a major-version bump; shipping under 1.1 instead because the
 package is one day old on PyPI with effectively zero adopters and the
-rename-cost-now vs carry-the-inconsistency-forever tradeoff clearly
+rename-cost-now vs carry-the-inconsistency-forward tradeoff clearly
 favors fixing it now. No aliases, no deprecation warnings — callers
 on 1.0.x must update their code.
 
