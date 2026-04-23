@@ -155,7 +155,10 @@ def install(app, *, register_runtime: bool = True):
 
     _inject_stores(app, store_components)
 
-    # Register one Dash callback per bridge.
+    # Register one Dash callback per bridge. Always set allow_duplicate=True
+    # on every Output so non-relay Dash callbacks (server-side or clientside)
+    # can also write to bridge-adjacent stores under Dash's symmetric
+    # multi-writer rule.
     for bridge_name, plan in plans.items():
         dispatch_fn = _build_bridge_dispatcher(plan)
         # Cache for tests / debugging.

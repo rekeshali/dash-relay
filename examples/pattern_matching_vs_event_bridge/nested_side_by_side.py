@@ -527,6 +527,7 @@ _CONSOLE_JS = r"""
     st.row.classList.remove("tl-pending");
     st.row = null;
     st.lastRtTime = 0;
+    st.inflight = 0;
     if (st.timer) { clearTimeout(st.timer); st.timer = null; }
     // Account the row's real click→last-RT duration against the running total.
     totals[side].time_ms += dur;
@@ -585,7 +586,17 @@ _CONSOLE_JS = r"""
     });
   }
 
-  function addRoundTrip(side, bytes) {
+  // addRoundTrip is called when a fetch is INITIATED. Returns a token the
+  // caller can pass to attachResponseBytes() once the response body has
+  // been read, so the dot's tooltip can be updated in place to show
+  // "req X · resp Y" instead of just request bytes.
+  //
+  // Importantly: this does NOT scheduleFinalize on its own. The row stays
+  // open as long as in-flight fetches > 0 (tracked via inflight counter).
+  // Without this, a fetch slower than the 600ms idle window would let the
+  // row finalize before its response arrived — the response would then
+  // spill into a new (init) row and undercount the click's wall time.
+  function addRoundTrip(side, reqBytes) {
     var st = tlState[side];
     if (!st.row) {
       // round-trip with no preceding click (e.g. init, or a click we didn't
@@ -593,28 +604,47 @@ _CONSOLE_JS = r"""
       startRow(side, "(init)");
     }
     var row = st.row;
-    // Bytes counter update is cheap and needed for finalizeRow readout;
-    // dot-draw (DOM mutation) is deferred.
-    row.dataset.bytes = String(parseInt(row.dataset.bytes || "0", 10) + bytes);
+    row.dataset.bytes = String(parseInt(row.dataset.bytes || "0", 10) + reqBytes);
+    st.inflight = (st.inflight || 0) + 1;
+
+    var token = { side: side, row: row, reqBytes: reqBytes, dot: null };
     queueDom(function () {
       var dots = row.querySelector(".tl-dots");
       if (!dots) return;
       var d = document.createElement("span");
       d.className = "tl-rt-dot";
-      d.title = "server round-trip · " + fmtBytes(bytes);
+      d.title = "server round-trip · req " + fmtBytes(reqBytes);
       dots.appendChild(d);
+      token.dot = d;
     });
-    scheduleFinalize(side);
+    return token;
+  }
+
+  // Called once the response body has been read; updates the dot's tooltip
+  // in place to reflect the full fetch (req + resp).
+  function attachResponseBytes(token, respBytes) {
+    if (!token) return;
+    queueDom(function () {
+      if (!token.dot) return;
+      token.dot.title =
+        "server round-trip · req " + fmtBytes(token.reqBytes) +
+        " · resp " + fmtBytes(respBytes);
+    });
   }
 
   // Called when a tracked fetch *resolves* (response received), not when
   // it's initiated. This is what makes the per-row duration reflect
   // click → last-response-received rather than click → last-request-sent.
+  // Decrements the in-flight counter; only schedules finalize when no
+  // fetches are still pending, so a slow response can't be left orphaned.
   function markResponseReceived(side) {
     var st = tlState[side];
     if (!st) return;
     st.lastRtTime = Date.now();
-    scheduleFinalize(side);
+    st.inflight = Math.max(0, (st.inflight || 1) - 1);
+    if (st.inflight === 0) {
+      scheduleFinalize(side);
+    }
   }
 
   // Intercept clicks before Dash sees them so we get clean per-click rows.
@@ -654,31 +684,51 @@ _CONSOLE_JS = r"""
       return origFetch.apply(this, args);
     }
     var rawBody = args[1].body || "";
-    var bytes = rawBody.length || 0;
+    var reqBytes = rawBody.length || 0;
     var body = null;
     try { body = JSON.parse(rawBody); } catch (e) {}
     var out = body && body.output;
     var trig = body && body.changedPropIds;
     var side = sideOf(out);
+    var dotToken = null;
     if (side) {
       var t = new Date();
       var stamp = String(t.getMinutes()).padStart(2, "0") + ":" +
                   String(t.getSeconds()).padStart(2, "0") + "." +
                   String(t.getMilliseconds()).padStart(3, "0");
       var label = (out || "?").split("@")[0];
-      var line = stamp + "  " + label + "  (" + fmtBytes(bytes) + ")  <-  " + shortTrig(trig);
-      // Console line is a DOM mutation — defer it so the side with more
-      // fetches doesn't pay more layout cost inside the timing window.
+      var line = stamp + "  " + label + "  (req " + fmtBytes(reqBytes) + ")  <-  " + shortTrig(trig);
       queueDom(function () { appendRaw(side, line); });
-      addRoundTrip(side, bytes);
+      dotToken = addRoundTrip(side, reqBytes);
       totals[side].trips += 1;
-      totals[side].bytes += bytes;
+      totals[side].bytes += reqBytes;
       refreshSummary(side);
     }
     var p = origFetch.apply(this, args);
     if (side) {
-      p.then(function () { markResponseReceived(side); },
-             function () { markResponseReceived(side); });
+      // Clone the response so we can read its body without consuming
+      // the stream Dash needs. Add the response bytes to the row's
+      // running total and the side's running total — but NOT another
+      // dot (one fetch = one dot; the dot counts the round-trip, not
+      // the request/response halves). Update the dot's tooltip in
+      // place to reflect the full fetch (req + resp).
+      p.then(function (response) {
+        try {
+          var clone = response.clone();
+          clone.text().then(function (text) {
+            var respBytes = (text && text.length) || 0;
+            var st = tlState[side];
+            if (st.row) {
+              var prev = parseInt(st.row.dataset.bytes || "0", 10);
+              st.row.dataset.bytes = String(prev + respBytes);
+            }
+            totals[side].bytes += respBytes;
+            attachResponseBytes(dotToken, respBytes);
+            refreshSummary(side);
+            markResponseReceived(side);
+          }).catch(function () { markResponseReceived(side); });
+        } catch (e) { markResponseReceived(side); }
+      }, function () { markResponseReceived(side); });
     }
     return p;
   };
@@ -856,17 +906,30 @@ app.index_string = app.index_string.replace("<head>", "<head>" + _CONSOLE_JS, 1)
 # Pure Dash column (approach A done right)
 #
 # One callback per action type. Dynamic entities use pattern-matching IDs
-# (ALL). Each pattern-matching callback uses the canonical guard
-# `if not ctx.triggered_id or ctx.triggered[0]["value"] is None: return no_update`
-# so phantom fires from changing matched sets don't mutate state. All nine
-# action callbacks share the single Output("pd-state","data") with
-# allow_duplicate=True.
+# (ALL). Each callback uses:
+#   - prevent_initial_call=True — gates the renderer's OUT-path (new
+#     output-matched element mounted). In our shape (static Output, ALL
+#     Input) this path never fires, but the flag is set for correctness.
+#   - An in-callback guard: `if not ctx.triggered_id or
+#     ctx.triggered[0]["value"] is None: return no_update`. This is the
+#     actual line of defense against IN-path phantom fires — when a new
+#     ALL-matched input mounts, the renderer fires through a path that
+#     is NOT gated by prevent_initial_call. The guard catches those.
+#     The pattern isn't documented by Dash; it's community-derived.
+# All nine action callbacks share the single Output("pd-state","data")
+# with allow_duplicate=True.
 # ---------------------------------------------------------------------------
 # >>> PD-ACTIONS-BEGIN
 
 
 def _pd_guard():
-    """Return True iff this callback was actually triggered by a real click."""
+    """Filter IN-path phantoms: a real click has a non-None n_clicks value.
+
+    prevent_initial_call=True only gates the renderer's OUT-path, which
+    doesn't fire for callbacks whose Output is a static id. The IN-path
+    (triggered by a new input matching an ALL pattern) is ungated in Dash,
+    so we need a body-level check for static-output + ALL-input shapes.
+    """
     return bool(ctx.triggered_id) and ctx.triggered and ctx.triggered[0]["value"] is not None
 
 
@@ -1184,7 +1247,16 @@ def _column(title, badges, root_id, timeline_id, console_id, summary_id, runbtn_
         html.Div([
             html.Span("click timeline", style={"fontSize": "12px", "color": "#666"}),
             html.Span(
-                "  ● user click    ● server round-trip",
+                # Bullets carry the same colors as the actual timeline dots
+                # (.tl-click-dot = #22c55e green, .tl-rt-dot = #ef4444 red).
+                # The whole legend is otherwise gray for de-emphasis.
+                children=[
+                    "  ",
+                    html.Span("●", style={"color": "#22c55e"}),
+                    " user click    ",
+                    html.Span("●", style={"color": "#ef4444"}),
+                    " server round-trip",
+                ],
                 style={"fontSize": "11px", "color": "#888", "marginLeft": "12px"},
             ),
         ]),

@@ -11,14 +11,19 @@ callback per interactive element.
 
 *One nested workspace surface (Folders → Tabs → Panels, 9 actions)
 built two ways in the same Dash app. Each column runs the same scripted
-9-click sequence; the compare panel in the top-right aggregates:*
+9-click sequence; the compare panel in the top-right aggregates the
+totals across runs:*
 
 - ***Round-trips*** — `_dash-update-component` fetches fired · **~80% fewer** on the bridge side
-- ***Data sent*** — total bytes over the wire · **~83% less** on the bridge side
-- ***Wall time*** — click → last server response · **~40% less** on the bridge side
+- ***Data sent*** — request + response bytes over the wire · **~34% less** on the bridge side
+- ***Wall time*** — click → last server response · **~38% less** on the bridge side
 
-*Left column: pattern-matching callbacks with the canonical guard.
-Right column: the Dash Relay event bridge. Measured on an M1 Pro.*
+*Left column: pattern-matching callbacks with the recommended in-callback
+guard against phantom fires. Right column: the Dash Relay event bridge.
+Measured locally on an M1 Pro across 3 runs of the test sequence; per-run
+numbers vary slightly with system noise. Round-trip count is structural
+and stable; byte and time figures depend on payload size and network
+latency.*
 
 ## Why it exists
 

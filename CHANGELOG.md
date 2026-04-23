@@ -4,6 +4,61 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] — 2026-04-22
+
+Demo and documentation cleanup. No library code changes; no PyPI
+release planned for this on its own — the next technical change ships
+under 2.0.2 (or higher) and inherits these fixes.
+
+### Comparison demo
+
+The head-to-head comparison demo (`examples/pattern_matching_vs_event_bridge/`)
+had three measurement bugs and one stale claim. All four are fixed.
+
+- **Wire-byte accounting was request-only.** The demo's fetch
+  interceptor was counting only request bodies, not responses. This
+  inflated the relay-side advantage on the "Data sent" metric to
+  ~83% — the honest figure with both halves counted is ~34%. The
+  instrumentation diff to fix this had been sitting in `.notes/` since
+  the prior internal audit.
+
+- **Dot-counting bookkeeping bug.** When the response-byte fix was
+  applied, it called the timeline's `addRoundTrip` helper *twice*
+  per fetch (once for the request, once for the response), doubling
+  the per-row dot count. Two fetches per click rendered as four red
+  dots. Fix: response handler now updates the row's running byte
+  total without adding a duplicate dot, and the dot's hover tooltip
+  is updated in place once the response arrives so each dot reads
+  `req X · resp Y`.
+
+- **Wall-time finalize-window bug.** The demo's per-row timer was
+  scheduled on every request *initiation* with a 600 ms idle
+  debounce. A single fetch slower than 600 ms would let the row
+  finalize before its response arrived; the late response would
+  spill into a new (init) row, undercounting wall time. Fix: track
+  in-flight fetches per side and only schedule finalize when the
+  count returns to zero.
+
+- **Legend bullets were gray instead of color-matched.** The "user
+  click" and "server round-trip" legend used bare `●` characters in
+  a gray-colored span, so both bullets inherited gray and gave no
+  visual cue to the actual timeline dot colors. Fix: render each
+  bullet in its own colored span (#22c55e green for user click,
+  #ef4444 red for server round-trip).
+
+### Documentation
+
+- Updated the README's headline performance bullets and the example
+  README's measurement table to honest figures: ~80% fewer
+  round-trips (unchanged — this is structural), ~34% less data sent
+  (was ~83%), ~38% faster wall time (was ~40%, basically unchanged).
+- New comparison-demo.gif recorded after all fixes; the visible
+  numbers in the GIF match what readers will see if they run the
+  demo themselves.
+- Added language clarifying that round-trip count is structural and
+  stable while byte and time figures depend on payload size and
+  network latency.
+
 ## [2.0.1] — 2026-04-22
 
 Documentation cleanup pass. No library code changes; no PyPI release.
