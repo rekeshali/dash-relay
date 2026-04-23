@@ -65,8 +65,12 @@ def callback(*deps, **_kwargs) -> Callable[[Callable], Callable]:
 
     Pattern-matched component ids in ``Output`` / ``State`` are not
     supported (the per-bridge consolidation in ``install()`` is
-    incompatible with MATCH-binding). ``InstallError`` is raised at
-    install time if any handler declares them.
+    incompatible with MATCH-binding). They're also rarely needed:
+    dash-relay's instance-routing answer is ``target=<id>`` on the
+    emitter, read as ``event["target"]`` in the handler — one
+    handler per action, write to a single store, render rebuilds
+    instances from state. ``InstallError`` is raised at install time
+    if any handler declares pattern-matched ids.
     """
     outputs: list[Output] = []
     actions: list[Action] = []
@@ -143,16 +147,28 @@ def _validate_no_pattern_ids(spec: CallbackSpec) -> None:
             raise InstallError(
                 f"@callback declared in {spec.source_file}:{spec.source_line} "
                 f"uses a pattern-matched dict id in Output ({o.component_id!r}). "
-                "Pattern-matched ids are not supported in dash-relay — "
-                "use a fixed store id or write a separate non-relay callback."
+                "Pattern-matched ids are not supported in dash-relay. "
+                "The instance-routing case pattern-matching usually solves "
+                "(react to any of N dynamic instances) is handled in relay "
+                "by passing target=<id> on the emitter and reading "
+                "event['target'] in the handler — write to a single store "
+                "and let the renderer rebuild instances from state. If you "
+                "genuinely need pattern-matched output writes, use a "
+                "separate non-relay @app.callback for that one case."
             )
     for s in spec.states:
         if _is_pattern_id(s.component_id):
             raise InstallError(
                 f"@callback declared in {spec.source_file}:{spec.source_line} "
                 f"uses a pattern-matched dict id in State ({s.component_id!r}). "
-                "Pattern-matched ids are not supported in dash-relay — "
-                "use a fixed store id or write a separate non-relay callback."
+                "Pattern-matched ids are not supported in dash-relay. "
+                "The instance-routing case pattern-matching usually solves "
+                "(react to any of N dynamic instances) is handled in relay "
+                "by passing target=<id> on the emitter and reading "
+                "event['target'] in the handler — write to a single store "
+                "and let the renderer rebuild instances from state. If you "
+                "genuinely need pattern-matched output writes, use a "
+                "separate non-relay @app.callback for that one case."
             )
 
 

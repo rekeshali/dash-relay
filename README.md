@@ -279,10 +279,22 @@ clientside) can also write to them with `allow_duplicate=True`. The
 relay dispatcher's outputs are always declared with `allow_duplicate=True`
 internally so coexistence works without extra effort.
 
-**Pattern-matched ids are not supported.** If a handler declares
-an `Output` or `State` with a dict-shaped (`MATCH`/`ALL`/`ALLSMALLER`)
-id, `install()` raises `InstallError`. Use a fixed store id, or write
-a separate non-relay `@app.callback` for the pattern-matched case.
+**Pattern-matched ids aren't needed.** Dash's pattern-matching solves
+"react to any of N dynamic instances of the same kind of component."
+Dash Relay solves the same problem differently: one handler per
+action, with the affected instance identified by `target=` on the
+emitter and read as `event["target"]` in the handler. The handler
+writes to a single store; a regular Dash render callback rebuilds
+the matched instances from that state. There's no need for
+`Output({"type": "row", "id": MATCH}, ...)` because relay doesn't
+write back to instance components — it writes to stores.
+
+If a handler declares a dict-shaped (`MATCH`/`ALL`/`ALLSMALLER`) id
+in `Output` or `State`, `install()` raises `InstallError` (the
+per-bridge consolidation can't carry MATCH bindings). For the rare
+case where you genuinely need pattern-matched output writes outside
+the state-store-and-re-render flow, write a separate non-relay
+`@app.callback` for it.
 
 **Event dict keys** (frozen for v2):
 

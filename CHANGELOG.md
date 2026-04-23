@@ -231,10 +231,19 @@ When `app=app` is passed (post-install):
 ### Limits
 
 Pattern-matched ids (`MATCH`/`ALL`/`ALLSMALLER`) in handler
-`Output`/`State` are not supported in v2. `install()` raises
-`InstallError`. The per-bridge consolidation is incompatible with
-MATCH-binding semantics. Workaround: write a separate non-relay
-`@app.callback` for that case.
+`Output`/`State` are not supported in v2 — `install()` raises
+`InstallError` if any handler declares them. The per-bridge
+consolidation is incompatible with MATCH-binding semantics.
+
+In practice this is rarely a working limit because relay's
+instance-routing answer is `target=<id>` on the emitter, read as
+`event["target"]` in the handler. One handler per action handles N
+dynamic instances; the renderer rebuilds matched components from the
+state store. The Dash use case pattern-matching usually solves —
+"react to any of N instances of this thing being clicked" — is
+covered natively. For the rare case where you genuinely need
+pattern-matched output writes outside the state-store flow, write a
+separate non-relay `@app.callback` for it.
 
 ### New error type
 
